@@ -2,11 +2,13 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
-import { MainLayout, AdminLayout } from './components/navigation';
+import { ProtectedAdminRoute } from './components/ProtectedAdminRoute';
+import { MainLayout } from './components/navigation';
 import { VendorLayout } from './components/vendor';
+import { AdminLayout } from './layouts/AdminLayout';
 import { FrameScreen } from './screens/FrameScreen';
 import { LoginScreen, SignupScreen } from './screens/auth';
-import { AdminDashboardScreen, AdminUsersScreen, AdminListingsScreen, AdminTransactionsScreen, AdminKYCApprovalsScreen } from './screens/admin';
+import { AdminDashboardScreen, AdminUsersScreen, AdminListingsScreen, AdminTransactionsScreen, AdminKYCApprovalsScreen, AdminSettingsScreen } from './screens/admin';
 import { ProductSearchScreen } from './screens/ProductSearchScreen';
 import { ProductDetailScreen } from './screens/ProductDetailScreen';
 import { CartScreen } from './screens/CartScreen';
@@ -36,6 +38,7 @@ const App: React.FC = () => {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginScreen />} />
+          <Route path="/signin" element={<LoginScreen />} />
           <Route path="/signup" element={<SignupScreen />} />
 
           <Route
@@ -374,58 +377,54 @@ const App: React.FC = () => {
           />
 
           <Route
-            path="/admin/dashboard"
+            path="/admin"
             element={
-              <ProtectedRoute>
+              <ProtectedAdminRoute>
                 <AdminLayout />
-              </ProtectedRoute>
+              </ProtectedAdminRoute>
             }
           >
             <Route index element={<AdminDashboardScreen />} />
-          </Route>
-
-          <Route
-            path="/admin/users"
-            element={
-              <ProtectedRoute>
-                <AdminLayout />
-              </ProtectedRoute>
-            }
-          >
-            <Route index element={<AdminUsersScreen />} />
-          </Route>
-
-          <Route
-            path="/admin/listings"
-            element={
-              <ProtectedRoute>
-                <AdminLayout />
-              </ProtectedRoute>
-            }
-          >
-            <Route index element={<AdminListingsScreen />} />
-          </Route>
-
-          <Route
-            path="/admin/transactions"
-            element={
-              <ProtectedRoute>
-                <AdminLayout />
-              </ProtectedRoute>
-            }
-          >
-            <Route index element={<AdminTransactionsScreen />} />
-          </Route>
-
-          <Route
-            path="/admin/kyc-approvals"
-            element={
-              <ProtectedRoute>
-                <AdminLayout />
-              </ProtectedRoute>
-            }
-          >
-            <Route index element={<AdminKYCApprovalsScreen />} />
+            <Route
+              path="users"
+              element={
+                <ProtectedAdminRoute requiredPermission="users.view">
+                  <AdminUsersScreen />
+                </ProtectedAdminRoute>
+              }
+            />
+            <Route
+              path="listings"
+              element={
+                <ProtectedAdminRoute requiredPermission="products.view">
+                  <AdminListingsScreen />
+                </ProtectedAdminRoute>
+              }
+            />
+            <Route
+              path="transactions"
+              element={
+                <ProtectedAdminRoute requiredPermission="transactions.view">
+                  <AdminTransactionsScreen />
+                </ProtectedAdminRoute>
+              }
+            />
+            <Route
+              path="kyc"
+              element={
+                <ProtectedAdminRoute requiredPermission="kyc.view">
+                  <AdminKYCApprovalsScreen />
+                </ProtectedAdminRoute>
+              }
+            />
+            <Route
+              path="settings"
+              element={
+                <ProtectedAdminRoute requiredPermission="settings.view">
+                  <AdminSettingsScreen />
+                </ProtectedAdminRoute>
+              }
+            />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

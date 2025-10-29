@@ -38,7 +38,9 @@ export const LoginScreen: React.FC = () => {
             .eq('id', session.user.id)
             .maybeSingle();
 
-          if (userProfile?.role === 'vendor') {
+          if (userProfile?.role === 'admin') {
+            navigate('/admin', { replace: true });
+          } else if (userProfile?.role === 'vendor') {
             navigate('/vendor/dashboard', { replace: true });
           } else {
             const from = (location.state as any)?.from?.pathname || '/';
