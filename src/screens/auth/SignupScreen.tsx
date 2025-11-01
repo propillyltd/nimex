@@ -59,7 +59,7 @@ export const SignupScreen: React.FC = () => {
       setLoading(false);
     } else {
       if (selectedRole === 'vendor') {
-        navigate('/kyc-verification');
+        navigate('/vendor/onboarding');
       } else {
         navigate('/');
       }
