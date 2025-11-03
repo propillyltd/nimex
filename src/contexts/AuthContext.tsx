@@ -17,6 +17,8 @@ interface AdminRole {
 
 interface PermissionData {
   permission_name: string;
+  category: string;
+  description: string;
 }
 
 interface RoleData {
@@ -44,7 +46,7 @@ interface AuthContextType {
   session: Session | null;
   profile: Profile | null;
   loading: boolean;
-  signUp: (email: string, password: string, fullName: string, role: UserRole) => Promise<{ error: AuthError | null }>;
+  signUp: (email: string, password: string, fullName: string, role: UserRole) => Promise<{ error: AuthError | Error | null }>;
   signIn: (email: string, password: string) => Promise<{ error: AuthError | null }>;
   signOut: () => Promise<void>;
   updateProfile: (updates: Partial<Profile>) => Promise<{ error: Error | null }>;
@@ -116,25 +118,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
    */
   const fetchProfile = async (userId: string): Promise<void> => {
     try {
+      console.log('Fetching profile for user:', userId);
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', userId)
         .maybeSingle();
 
-      if (error) throw error;
+      if (error) {
+        console.error('Database error fetching profile:', error);
+        throw error;
+      }
 
       if (data) {
+        console.log('Profile data retrieved:', { id: (data as any).id, role: (data as any).role });
         const profileData: Profile = data as Profile;
 
         // Load admin-specific data if user is admin
         if (profileData.role === 'admin') {
-          const { data: permissionsData } = await supabase.rpc('get_user_permissions', {
+          const { data: permissionsData } = await (supabase.rpc('get_user_permissions', {
             user_id: userId,
-          });
+          }) as any);
 
           if (permissionsData) {
-            profileData.adminPermissions = permissionsData.map((p: PermissionData) => p.permission_name);
+            profileData.adminPermissions = (permissionsData as PermissionData[]).map((p: PermissionData) => p.permission_name);
           }
 
           const { data: rolesData } = await supabase
@@ -151,7 +158,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             profileData.adminRoles = rolesData.map((r: RoleData) => ({
               name: r.admin_roles.name,
               display_name: r.admin_roles.display_name,
-              permissions: [],
+              permissions: (permissionsData as PermissionData[] || []).map((p: PermissionData) => ({
+                name: p.permission_name,
+                category: p.category,
+                description: p.description,
+              })),
             }));
           }
         }
@@ -165,7 +176,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             .single();
 
           // Vendor needs onboarding if business name is empty or just whitespace
-          profileData.needsOnboarding = Boolean(vendorData && (!vendorData.business_name || vendorData.business_name.trim() === ''));
+          const businessName = (vendorData as any)?.business_name || '';
+          profileData.needsOnboarding = !businessName || businessName.trim() === '';
         } else {
           profileData.needsOnboarding = false;
         }
@@ -174,6 +186,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } catch (error) {
       console.error('Error fetching profile:', error);
+      // Set profile to null on error to prevent inconsistent state
+      setProfile(null);
+      throw error; // Re-throw to allow calling code to handle
     }
   };
 
@@ -220,11 +235,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             email: email,
             full_name: fullName,
             role: role,
-          });
+          } as any);
 
         if (profileError) {
           console.error('Error creating profile:', profileError);
-          // Don't return error here as auth was successful
+          // Return error to prevent inconsistent state
+          return { error: profileError };
         }
 
         // If vendor, create initial vendor record with free subscription
@@ -239,7 +255,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               subscription_start_date: new Date().toISOString(),
               verification_badge: 'none',
               is_active: true,
-            });
+            } as any);
 
           if (vendorError) {
             console.error('Error creating vendor record:', vendorError);
@@ -280,9 +296,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .update(updates)
+      const { error } = await (supabase
+        .from('profiles') as any)
+        .update(updates as any)
         .eq('id', user.id);
 
       if (error) throw error;
