@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/button';
 import { MapPin, Building2, Phone, FileText, Save, Loader2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
+import { LocationPicker } from '../../components/maps';
 
 interface Market {
   id: string;
@@ -40,7 +41,10 @@ export const VendorProfileSettingsScreen: React.FC = () => {
     businessPhone: '',
     marketId: '',
     marketLocationDetails: '',
+    businessLat: null as number | null,
+    businessLng: null as number | null,
   });
+  const [showLocationPicker, setShowLocationPicker] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -76,6 +80,8 @@ export const VendorProfileSettingsScreen: React.FC = () => {
             businessPhone: vendorData.business_phone || '',
             marketId: vendorData.market_id || '',
             marketLocationDetails: vendorData.market_location_details || '',
+            businessLat: vendorData.business_lat || null,
+            businessLng: vendorData.business_lng || null,
           });
 
           if (vendorData.market_id) {
@@ -116,6 +122,8 @@ export const VendorProfileSettingsScreen: React.FC = () => {
         business_phone: formData.businessPhone,
         market_id: formData.marketId || null,
         market_location_details: formData.marketLocationDetails || null,
+        business_lat: formData.businessLat,
+        business_lng: formData.businessLng,
         updated_at: new Date().toISOString(),
       };
 
@@ -244,13 +252,46 @@ export const VendorProfileSettingsScreen: React.FC = () => {
               <label className="block font-sans font-medium text-xs md:text-sm text-neutral-700 mb-1 md:mb-2">
                 General Business Address
               </label>
-              <input
-                type="text"
-                value={formData.businessAddress}
-                onChange={(e) => setFormData({ ...formData, businessAddress: e.target.value })}
-                className="w-full h-10 md:h-12 px-3 md:px-4 rounded-lg border border-neutral-200 font-sans text-sm md:text-base text-neutral-900 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                placeholder="e.g., Ikeja, Lagos"
-              />
+              <div className="space-y-3">
+                <input
+                  type="text"
+                  value={formData.businessAddress}
+                  onChange={(e) => setFormData({ ...formData, businessAddress: e.target.value })}
+                  className="w-full h-10 md:h-12 px-3 md:px-4 rounded-lg border border-neutral-200 font-sans text-sm md:text-base text-neutral-900 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  placeholder="e.g., Ikeja, Lagos"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShowLocationPicker(!showLocationPicker)}
+                  className="w-full"
+                >
+                  <MapPin className="w-4 h-4 mr-2" />
+                  {showLocationPicker ? 'Hide Map' : 'Pick Location on Map'}
+                </Button>
+                {showLocationPicker && (
+                  <LocationPicker
+                    initialLocation={
+                      formData.businessLat && formData.businessLng
+                        ? {
+                            lat: formData.businessLat,
+                            lng: formData.businessLng,
+                            address: formData.businessAddress,
+                          }
+                        : undefined
+                    }
+                    onLocationSelect={(location) => {
+                      setFormData({
+                        ...formData,
+                        businessAddress: location.address,
+                        businessLat: location.lat,
+                        businessLng: location.lng,
+                      });
+                    }}
+                    placeholder="Search for your business location in Nigeria"
+                  />
+                )}
+              </div>
             </div>
           </CardContent>
         </Card>
