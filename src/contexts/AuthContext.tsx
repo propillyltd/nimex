@@ -198,6 +198,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
    */
   const signUp = async (email: string, password: string, fullName: string, role: UserRole) => {
     try {
+      console.log('Starting signup process for:', email, 'as', role);
+
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
@@ -205,53 +207,68 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           data: {
             full_name: fullName,
             role: role,
-          }
+          },
+          emailRedirectTo: window.location.origin
         }
       });
 
       if (error) {
+        console.error('Auth signup error:', error);
         return { error };
       }
 
-      // Create profile record
-      if (data.user) {
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .insert({
-            id: data.user.id,
-            email: email,
-            full_name: fullName,
-            role: role,
-          } as any);
-
-        if (profileError) {
-          console.error('Error creating profile:', profileError);
-          // Return error to prevent inconsistent state
-          return { error: profileError };
-        }
-
-        // If vendor, create initial vendor record with free subscription
-        if (role === 'vendor') {
-          const { error: vendorError } = await supabase
-            .from('vendors')
-            .insert({
-              user_id: data.user.id,
-              business_name: '', // Will be filled during onboarding
-              subscription_plan: 'free',
-              subscription_status: 'active',
-              subscription_start_date: new Date().toISOString(),
-              verification_badge: 'none',
-              is_active: true,
-            } as any);
-
-          if (vendorError) {
-            console.error('Error creating vendor record:', vendorError);
-          }
-        }
+      if (!data.user) {
+        console.error('No user data returned from signup');
+        return { error: new Error('No user data returned') as AuthError };
       }
 
+      console.log('User created in auth:', data.user.id);
+
+      // Create profile record
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .insert({
+          id: data.user.id,
+          email: email,
+          full_name: fullName,
+          role: role,
+        });
+
+      if (profileError) {
+        console.error('Error creating profile:', profileError);
+        return { error: new Error(`Failed to create profile: ${profileError.message}`) as AuthError };
+      }
+
+      console.log('Profile created successfully');
+
+      // If vendor, create initial vendor record
+      if (role === 'vendor') {
+        console.log('Creating vendor record...');
+        const { error: vendorError } = await supabase
+          .from('vendors')
+          .insert({
+            user_id: data.user.id,
+            business_name: '',
+            subscription_plan: 'free',
+            subscription_status: 'active',
+            subscription_start_date: new Date().toISOString(),
+            verification_badge: 'none',
+            verification_status: 'pending',
+            is_active: true,
+          });
+
+        if (vendorError) {
+          console.error('Error creating vendor record:', vendorError);
+          return { error: new Error(`Failed to create vendor record: ${vendorError.message}`) as AuthError };
+        }
+
+        console.log('Vendor record created successfully');
+      }
+
+      console.log('Signup completed successfully');
       return { error: null };
     } catch (error) {
+      console.error('Unexpected error during signup:', error);
       return { error: error as AuthError };
     }
   };
