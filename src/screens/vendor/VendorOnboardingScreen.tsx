@@ -57,7 +57,7 @@ interface NotificationState {
   visible: boolean;
 }
 
-const VendorOnboardingScreen: React.FC = () => {
+export const VendorOnboardingScreen: React.FC = () => {
   const navigate = useNavigate();
   const { user, profile } = useAuth();
   const [searchParams] = useSearchParams();
@@ -98,13 +98,17 @@ const VendorOnboardingScreen: React.FC = () => {
     const refCode = searchParams.get('ref');
     if (refCode) {
       (async () => {
-        const validation = await referralService.validateReferralCode(refCode);
-        if (validation.valid) {
-          setReferralData({
-            code: refCode,
-            type: validation.type,
-            referrerId: validation.referrerId,
-          });
+        try {
+          const validation = await referralService.validateReferralCode(refCode);
+          if (validation.valid && validation.referrerId) {
+            setReferralData({
+              code: refCode,
+              type: validation.type,
+              referrerId: validation.referrerId,
+            });
+          }
+        } catch (error) {
+          console.error('Error validating referral code:', error);
         }
       })();
     }
@@ -114,7 +118,7 @@ const VendorOnboardingScreen: React.FC = () => {
       // Any cleanup logic for market suggestions dropdown
       setShowMarketSuggestions(false);
     };
-  }, [searchParams]);
+  }, []);
 
   // Notification helper
   const showNotification = useCallback((type: NotificationState['type'], message: string) => {
@@ -496,5 +500,3 @@ const VendorOnboardingScreen: React.FC = () => {
     </>
   );
 };
-
-export default VendorOnboardingScreen;

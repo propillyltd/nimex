@@ -10,3 +10,4 @@ export { CustomersScreen } from './CustomersScreen';
 export { MessagesScreen } from './MessagesScreen';
 export { WalletScreen } from './WalletScreen';
 export { ReferralsScreen } from './ReferralsScreen';
+export { VendorOnboardingScreen } from './VendorOnboardingScreen';

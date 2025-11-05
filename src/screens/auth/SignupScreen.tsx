@@ -90,7 +90,8 @@ export const SignupScreen: React.FC = () => {
       setLoading(false);
     } else {
       if (selectedRole === 'vendor') {
-        navigate('/vendor/onboarding');
+        const params = formData.referralCode ? `?ref=${formData.referralCode}` : '';
+        navigate(`/vendor/onboarding${params}`);
       } else {
         navigate('/');
       }
