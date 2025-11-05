@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
+import { ToastProvider } from './contexts/ToastContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ProtectedAdminRoute } from './components/ProtectedAdminRoute';
 import { MainLayout } from './components/navigation';
@@ -32,6 +33,7 @@ import { ProfileScreen } from './screens/ProfileScreen';
 import { OrdersScreen } from './screens/OrdersScreen';
 import { NotificationsScreen } from './screens/NotificationsScreen';
 import { MarketerRegistrationScreen } from './screens/MarketerRegistrationScreen';
+import { NotFoundScreen } from './screens/NotFoundScreen';
 import { configValidator } from './services/configValidator';
 
 const App: React.FC = () => {
@@ -49,6 +51,7 @@ const App: React.FC = () => {
   return (
     <BrowserRouter>
       <AuthProvider>
+        <ToastProvider>
           <Routes>
             <Route path="/login" element={<LoginScreen />} />
             <Route path="/signin" element={<LoginScreen />} />
@@ -477,10 +480,11 @@ const App: React.FC = () => {
             />
           </Route>
 
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<NotFoundScreen />} />
           </Routes>
-        </AuthProvider>
-      </BrowserRouter>
+        </ToastProvider>
+      </AuthProvider>
+    </BrowserRouter>
   );
 };
 

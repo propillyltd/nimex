@@ -5,6 +5,7 @@ import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { useAuth } from '../contexts/AuthContext';
 
+import { triggerCartUpdate } from '../hooks/useCart';
 interface CartItem {
   id: string;
   product_id: string;
@@ -43,6 +44,7 @@ export const CartScreen: React.FC = () => {
   };
 
   const saveCart = (items: CartItem[]) => {
+    triggerCartUpdate();
     try {
       localStorage.setItem('nimex_cart', JSON.stringify(items));
       setCartItems(items);

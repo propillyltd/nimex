@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { PackageIcon, SearchIcon, UserIcon, MessageCircle, Bell, LogOut } from 'lucide-react';
+import { PackageIcon, SearchIcon, UserIcon, MessageCircle, Bell, LogOut, ShoppingCart } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useAuth } from '../../contexts/AuthContext';
+import { useCart } from '../../hooks/useCart';
 
 export const DesktopHeader: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, profile, signOut } = useAuth();
+  const { itemCount } = useCart();
   const [showMenu, setShowMenu] = useState(false);
 
   const handleSignOut = async () => {
@@ -66,6 +68,18 @@ export const DesktopHeader: React.FC = () => {
                 />
                 <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
               </div>
+              <button
+                onClick={() => navigate('/cart')}
+                className="relative p-2 hover:bg-neutral-100 rounded-lg transition-colors"
+                aria-label="Shopping cart"
+              >
+                <ShoppingCart className="w-5 h-5 text-neutral-700" />
+                {itemCount > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-primary-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                    {itemCount > 9 ? '9+' : itemCount}
+                  </span>
+                )}
+              </button>
               <Button
                 onClick={() => navigate('/chat')}
                 className="bg-green-700 hover:bg-green-800 text-white font-sans text-sm px-6 py-2 rounded-lg flex items-center gap-2"
