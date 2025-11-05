@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
+import { useToast } from '../contexts/ToastContext';
 import {
   SlidersHorizontal,
   Star,
@@ -12,6 +13,7 @@ import {
   X,
   SearchIcon,
 } from 'lucide-react';
+import { triggerCartUpdate } from '../hooks/useCart';
 
 interface Product {
   id: number;
@@ -203,6 +205,7 @@ const sortOptions = [
 
 export const ProductsScreen: React.FC = () => {
   const navigate = useNavigate();
+  const { success } = useToast();
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [selectedPriceRange, setSelectedPriceRange] = useState(0);
   const [minRating, setMinRating] = useState(0);
@@ -274,7 +277,8 @@ export const ProductsScreen: React.FC = () => {
     localStorage.setItem('nimex_cart', JSON.stringify(existingCart));
 
     // Show feedback
-    alert('Product added to cart!');
+    success(`${product.name} added to cart!`);
+    triggerCartUpdate();
   };
 
   const handleProductClick = (productId: number) => {
