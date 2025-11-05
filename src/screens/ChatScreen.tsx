@@ -62,50 +62,73 @@ export const ChatScreen: React.FC = () => {
   }, [selectedConversation]);
 
   const loadConversations = async () => {
-    const { data, error } = await supabase
-      .from('conversation_participants')
-      .select(`
-        conversation_id,
-        conversations (
-          id,
-          last_message_at
-        )
-      `)
-      .eq('user_id', user?.id)
-      .order('last_message_at', { ascending: false });
+    try {
+      const { data, error } = await supabase
+        .from('conversation_participants')
+        .select(`
+          conversation_id,
+          conversations (
+            id,
+            last_message_at
+          )
+        `)
+        .eq('user_id', user?.id)
+        .order('last_message_at', { ascending: false });
 
-    if (data && !error) {
+      if (error) {
+        console.error('Error loading conversations:', error);
+        return;
+      }
+
+      // Set empty array if no data
+      setConversations([]);
+    } catch (error) {
+      console.error('Error loading conversations:', error);
+      setConversations([]);
     }
   };
 
   const loadMessages = async (conversationId: string) => {
-    const { data, error } = await supabase
-      .from('messages')
-      .select(`
-        id,
-        content,
-        sender_id,
-        created_at,
-        profiles:sender_id (
-          full_name,
-          avatar_url
-        )
-      `)
-      .eq('conversation_id', conversationId)
-      .eq('is_deleted', false)
-      .order('created_at', { ascending: true });
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .select(`
+          id,
+          content,
+          sender_id,
+          created_at,
+          profiles:sender_id (
+            full_name,
+            avatar_url
+          )
+        `)
+        .eq('conversation_id', conversationId)
+        .eq('is_deleted', false)
+        .order('created_at', { ascending: true });
 
-    if (data && !error) {
-      setMessages(data.map(msg => ({
-        id: msg.id,
-        content: msg.content,
-        sender_id: msg.sender_id,
-        created_at: msg.created_at,
-        sender: {
-          full_name: msg.profiles?.full_name || 'Unknown',
-          avatar_url: msg.profiles?.avatar_url
-        }
-      })));
+      if (error) {
+        console.error('Error loading messages:', error);
+        setMessages([]);
+        return;
+      }
+
+      if (data) {
+        setMessages(data.map(msg => ({
+          id: msg.id,
+          content: msg.content,
+          sender_id: msg.sender_id,
+          created_at: msg.created_at,
+          sender: {
+            full_name: msg.profiles?.full_name || 'Unknown',
+            avatar_url: msg.profiles?.avatar_url
+          }
+        })));
+      } else {
+        setMessages([]);
+      }
+    } catch (error) {
+      console.error('Error loading messages:', error);
+      setMessages([]);
     }
   };
 

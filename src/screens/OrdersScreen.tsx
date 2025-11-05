@@ -50,7 +50,17 @@ export const OrdersScreen: React.FC = () => {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setOrders(data || []);
+
+      // Filter and format orders to handle null vendor data
+      const formattedOrders = (data || []).map(order => ({
+        ...order,
+        vendor: {
+          business_name: order.vendor?.business_name || 'Unknown Vendor'
+        },
+        order_items: order.order_items || []
+      }));
+
+      setOrders(formattedOrders);
     } catch (error) {
       console.error('Error loading orders:', error);
     } finally {
@@ -89,7 +99,7 @@ export const OrdersScreen: React.FC = () => {
   const filteredOrders = orders.filter((order) => {
     const matchesSearch =
       order.order_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      order.vendor.business_name.toLowerCase().includes(searchQuery.toLowerCase());
+      (order.vendor?.business_name || '').toLowerCase().includes(searchQuery.toLowerCase());
     const matchesFilter = filterStatus === 'all' || order.status === filterStatus;
     return matchesSearch && matchesFilter;
   });
@@ -175,7 +185,7 @@ export const OrdersScreen: React.FC = () => {
                         </span>
                       </div>
                       <p className="font-sans text-sm text-neutral-600">
-                        {order.vendor.business_name}
+                        {order.vendor?.business_name || 'Unknown Vendor'}
                       </p>
                       <p className="font-sans text-xs text-neutral-500 mt-1">
                         {new Date(order.created_at).toLocaleDateString('en-NG', {

@@ -239,7 +239,42 @@ export const ProductsScreen: React.FC = () => {
 
   const handleAddToCart = (productId: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    console.log('Added to cart:', productId);
+
+    const product = mockProducts.find(p => p.id === productId);
+    if (!product) return;
+
+    // Get existing cart from localStorage
+    const cartJson = localStorage.getItem('nimex_cart');
+    const existingCart = cartJson ? JSON.parse(cartJson) : [];
+
+    // Create cart item
+    const cartItem = {
+      id: Date.now().toString(),
+      product_id: product.id.toString(),
+      title: product.name,
+      price: product.price,
+      image: product.image,
+      vendor_id: product.vendorId.toString(),
+      vendor_name: product.vendor,
+      quantity: 1
+    };
+
+    // Check if product already in cart
+    const existingIndex = existingCart.findIndex((item: any) => item.product_id === product.id.toString());
+
+    if (existingIndex >= 0) {
+      // Update quantity
+      existingCart[existingIndex].quantity += 1;
+    } else {
+      // Add new item
+      existingCart.push(cartItem);
+    }
+
+    // Save to localStorage
+    localStorage.setItem('nimex_cart', JSON.stringify(existingCart));
+
+    // Show feedback
+    alert('Product added to cart!');
   };
 
   const handleProductClick = (productId: number) => {

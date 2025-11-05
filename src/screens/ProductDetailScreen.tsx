@@ -143,7 +143,41 @@ export const ProductDetailScreen: React.FC = () => {
       navigate('/login');
       return;
     }
-    navigate('/cart', { state: { addedProduct: product } });
+
+    if (!product) return;
+
+    // Get existing cart from localStorage
+    const cartJson = localStorage.getItem('nimex_cart');
+    const existingCart = cartJson ? JSON.parse(cartJson) : [];
+
+    // Create cart item
+    const cartItem = {
+      id: Date.now().toString(),
+      product_id: product.id,
+      title: product.title,
+      price: product.price,
+      image: images[0],
+      vendor_id: product.vendor_id,
+      vendor_name: vendor?.business_name || 'Vendor',
+      quantity: 1
+    };
+
+    // Check if product already in cart
+    const existingIndex = existingCart.findIndex((item: any) => item.product_id === product.id);
+
+    if (existingIndex >= 0) {
+      // Update quantity
+      existingCart[existingIndex].quantity += 1;
+    } else {
+      // Add new item
+      existingCart.push(cartItem);
+    }
+
+    // Save to localStorage
+    localStorage.setItem('nimex_cart', JSON.stringify(existingCart));
+
+    // Navigate to cart
+    navigate('/cart');
   };
 
   if (loading) {

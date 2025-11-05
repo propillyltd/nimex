@@ -7,7 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 
 export const ProfileScreen: React.FC = () => {
-  const { user, profile, updateProfile } = useAuth();
+  const { user, profile, updateProfile, loading } = useAuth();
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -37,6 +37,17 @@ export const ProfileScreen: React.FC = () => {
     }
     setSaving(false);
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-neutral-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-primary-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="font-sans text-neutral-600">Loading profile...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!user) {
     navigate('/login');
