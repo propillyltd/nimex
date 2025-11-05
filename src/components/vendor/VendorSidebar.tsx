@@ -13,6 +13,7 @@ import {
   User,
   Truck,
   Shield,
+  UserPlus,
 } from 'lucide-react';
 
 interface NavItem {
@@ -79,6 +80,11 @@ const additionalNavItems: NavItem[] = [
     label: 'Wallet',
     path: '/vendor/wallet',
     icon: <Wallet className="w-5 h-5" />,
+  },
+  {
+    label: 'Referrals',
+    path: '/vendor/referrals',
+    icon: <UserPlus className="w-5 h-5" />,
   },
 ];
 

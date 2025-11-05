@@ -8,7 +8,7 @@ import { VendorLayout } from './components/vendor';
 import { AdminLayout } from './layouts/AdminLayout';
 import { FrameScreen } from './screens/FrameScreen';
 import { LoginScreen, SignupScreen } from './screens/auth';
-import { AdminDashboardScreen, AdminUsersScreen, AdminListingsScreen, AdminTransactionsScreen, AdminKYCApprovalsScreen, AdminSettingsScreen } from './screens/admin';
+import { AdminDashboardScreen, AdminUsersScreen, AdminListingsScreen, AdminTransactionsScreen, AdminKYCApprovalsScreen, AdminSettingsScreen, AdminMarketersScreen, AdminCommissionsScreen } from './screens/admin';
 import { ProductSearchScreen } from './screens/ProductSearchScreen';
 import { ProductDetailScreen } from './screens/ProductDetailScreen';
 import { CartScreen } from './screens/CartScreen';
@@ -23,7 +23,7 @@ import { AboutScreen } from './screens/AboutScreen';
 import { TermsScreen } from './screens/TermsScreen';
 import { PrivacyScreen } from './screens/PrivacyScreen';
 import { ContactScreen } from './screens/ContactScreen';
-import { AdsManagementScreen, VendorDashboardScreen, OrdersManagementScreen, VendorProfileSettingsScreen, ProductsManagementScreen, CreateProductScreen, VendorAccountScreen, AnalyticsScreen, CustomersScreen, MessagesScreen, WalletScreen } from './screens/vendor';
+import { AdsManagementScreen, VendorDashboardScreen, OrdersManagementScreen, VendorProfileSettingsScreen, ProductsManagementScreen, CreateProductScreen, VendorAccountScreen, AnalyticsScreen, CustomersScreen, MessagesScreen, WalletScreen, ReferralsScreen } from './screens/vendor';
 import VendorOnboardingScreen from './screens/vendor/VendorOnboardingScreen';
 import { CheckoutScreen } from './screens/CheckoutScreen';
 import { OrderTrackingScreen } from './screens/OrderTrackingScreen';
@@ -32,6 +32,7 @@ import { EscrowDashboardScreen } from './screens/vendor/EscrowDashboardScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
 import { OrdersScreen } from './screens/OrdersScreen';
 import { NotificationsScreen } from './screens/NotificationsScreen';
+import { MarketerRegistrationScreen } from './screens/MarketerRegistrationScreen';
 import { configValidator } from './services/configValidator';
 
 const App: React.FC = () => {
@@ -53,6 +54,7 @@ const App: React.FC = () => {
             <Route path="/login" element={<LoginScreen />} />
             <Route path="/signin" element={<LoginScreen />} />
             <Route path="/signup" element={<SignupScreen />} />
+            <Route path="/marketer/register" element={<MarketerRegistrationScreen />} />
 
           <Route
             path="/"
@@ -345,6 +347,17 @@ const App: React.FC = () => {
           />
 
           <Route
+            path="/vendor/referrals"
+            element={
+              <ProtectedRoute>
+                <VendorLayout>
+                  <ReferralsScreen />
+                </VendorLayout>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
             path="/blog"
             element={
               <MainLayout>
@@ -444,6 +457,22 @@ const App: React.FC = () => {
               element={
                 <ProtectedAdminRoute requiredPermission="settings.view">
                   <AdminSettingsScreen />
+                </ProtectedAdminRoute>
+              }
+            />
+            <Route
+              path="marketers"
+              element={
+                <ProtectedAdminRoute>
+                  <AdminMarketersScreen />
+                </ProtectedAdminRoute>
+              }
+            />
+            <Route
+              path="commissions"
+              element={
+                <ProtectedAdminRoute>
+                  <AdminCommissionsScreen />
                 </ProtectedAdminRoute>
               }
             />

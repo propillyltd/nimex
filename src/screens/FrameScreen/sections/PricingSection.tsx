@@ -85,6 +85,26 @@ export const PricingSection = (): JSX.Element => {
             Cancel or change your plan anytime.
           </p>
         </div>
+
+        <div className="mt-16 p-8 bg-gradient-to-br from-blue-50 to-green-50 rounded-2xl border border-blue-200">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+            <div className="flex-1 text-center md:text-left">
+              <h3 className="[font-family:'Poppins',Helvetica] font-bold text-[#19191f] text-2xl mb-2">
+                Become a NIMEX Marketer
+              </h3>
+              <p className="[font-family:'Inter',Helvetica] font-normal text-[#19191f] text-base opacity-80">
+                Earn commissions by referring vendors to our platform. Join our marketing partner program today!
+              </p>
+            </div>
+            <div className="flex-shrink-0">
+              <Link to="/marketer/register">
+                <Button className="bg-primary-500 hover:bg-primary-600 text-white px-8 h-12 rounded-lg [font-family:'Inter',Helvetica] font-semibold">
+                  Register as Marketer
+                </Button>
+              </Link>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   );

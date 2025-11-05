@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { PackageIcon, Eye, EyeOff, ShoppingBag, UserIcon } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { PackageIcon, Eye, EyeOff, ShoppingBag, UserIcon, CheckCircle } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { useAuth } from '../../contexts/AuthContext';
+import { referralService } from '../../services/referralService';
 import type { UserRole } from '../../types/database';
 
 export const SignupScreen: React.FC = () => {
   const navigate = useNavigate();
   const { signUp } = useAuth();
+  const [searchParams] = useSearchParams();
 
   const [step, setStep] = useState<'role' | 'details'>('role');
   const [selectedRole, setSelectedRole] = useState<UserRole | null>(null);
@@ -16,10 +18,39 @@ export const SignupScreen: React.FC = () => {
     email: '',
     password: '',
     confirmPassword: '',
+    referralCode: '',
   });
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [referralValidation, setReferralValidation] = useState<{
+    valid: boolean;
+    type: 'vendor' | 'marketer' | null;
+    checking: boolean;
+  }>({ valid: false, type: null, checking: false });
+
+  useEffect(() => {
+    const refCode = searchParams.get('ref');
+    if (refCode) {
+      setFormData(prev => ({ ...prev, referralCode: refCode }));
+      validateReferralCode(refCode);
+    }
+  }, [searchParams]);
+
+  const validateReferralCode = async (code: string) => {
+    if (!code) {
+      setReferralValidation({ valid: false, type: null, checking: false });
+      return;
+    }
+
+    setReferralValidation({ valid: false, type: null, checking: true });
+    const result = await referralService.validateReferralCode(code);
+    setReferralValidation({
+      valid: result.valid,
+      type: result.type,
+      checking: false,
+    });
+  };
 
   const handleRoleSelect = (role: UserRole) => {
     setSelectedRole(role);
@@ -285,6 +316,45 @@ export const SignupScreen: React.FC = () => {
                 placeholder="Re-enter your password"
               />
             </div>
+
+            {selectedRole === 'vendor' && (
+              <div>
+                <label htmlFor="referralCode" className="block font-sans font-medium text-neutral-700 mb-2">
+                  Referral Code (Optional)
+                </label>
+                <div className="relative">
+                  <input
+                    id="referralCode"
+                    type="text"
+                    value={formData.referralCode}
+                    onChange={(e) => {
+                      setFormData({ ...formData, referralCode: e.target.value });
+                      validateReferralCode(e.target.value);
+                    }}
+                    className="w-full h-12 px-4 pr-12 rounded-lg border border-neutral-200 font-sans text-neutral-900 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    placeholder="Enter referral code"
+                  />
+                  {referralValidation.checking && (
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                      <div className="w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin"></div>
+                    </div>
+                  )}
+                  {!referralValidation.checking && referralValidation.valid && (
+                    <CheckCircle className="w-5 h-5 text-green-600 absolute right-4 top-1/2 -translate-y-1/2" />
+                  )}
+                </div>
+                {referralValidation.valid && (
+                  <p className="font-sans text-sm text-green-600 mt-1">
+                    Valid {referralValidation.type === 'vendor' ? 'vendor' : 'marketer'} referral code
+                  </p>
+                )}
+                {formData.referralCode && !referralValidation.checking && !referralValidation.valid && (
+                  <p className="font-sans text-sm text-red-600 mt-1">
+                    Invalid referral code
+                  </p>
+                )}
+              </div>
+            )}
 
             <Button
               type="submit"

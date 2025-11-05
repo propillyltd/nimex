@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { subscriptionService } from '../../services/subscriptionService';
+import { referralService } from '../../services/referralService';
 import { MARKET_LOCATIONS, type MarketLocation } from '../../data/marketLocations';
 import { SUB_CATEGORY_TAGS, type SubCategoryTag } from '../../data/subCategoryTags';
 import { Button } from '../../components/ui/button';
@@ -59,8 +60,14 @@ interface NotificationState {
 const VendorOnboardingScreen: React.FC = () => {
   const navigate = useNavigate();
   const { user, profile } = useAuth();
+  const [searchParams] = useSearchParams();
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [referralData, setReferralData] = useState<{
+    code: string;
+    type: 'vendor' | 'marketer' | null;
+    referrerId: string | null;
+  }>({ code: '', type: null, referrerId: null });
   const [marketSuggestions, setMarketSuggestions] = useState<MarketLocation[]>([]);
   const [showMarketSuggestions, setShowMarketSuggestions] = useState(false);
   const [availableTags, setAvailableTags] = useState<SubCategoryTag[]>([]);
@@ -87,12 +94,27 @@ const VendorOnboardingScreen: React.FC = () => {
     // Load available sub-category tags based on common categories
     setAvailableTags(SUB_CATEGORY_TAGS.slice(0, INITIAL_TAG_DISPLAY_COUNT));
 
+    // Check for referral code in URL
+    const refCode = searchParams.get('ref');
+    if (refCode) {
+      (async () => {
+        const validation = await referralService.validateReferralCode(refCode);
+        if (validation.valid) {
+          setReferralData({
+            code: refCode,
+            type: validation.type,
+            referrerId: validation.referrerId,
+          });
+        }
+      })();
+    }
+
     // Cleanup function for event listeners
     return () => {
       // Any cleanup logic for market suggestions dropdown
       setShowMarketSuggestions(false);
     };
-  }, []);
+  }, [searchParams]);
 
   // Notification helper
   const showNotification = useCallback((type: NotificationState['type'], message: string) => {
@@ -273,6 +295,30 @@ const VendorOnboardingScreen: React.FC = () => {
 
       const vendorId = (insertedVendor as any)?.id;
       if (!vendorId) throw new Error('Failed to create vendor record');
+
+      // Handle referral tracking if referral code was used
+      if (referralData.code && referralData.type && referralData.referrerId) {
+        const commissionSettings = await referralService.getCommissionSettings();
+        const commissionAmount = referralData.type === 'vendor'
+          ? commissionSettings.vendorReferralAmount
+          : commissionSettings.marketerReferralAmount;
+
+        if (referralData.type === 'vendor') {
+          await referralService.createVendorReferral(
+            referralData.referrerId,
+            vendorId,
+            referralData.code,
+            commissionAmount
+          );
+        } else if (referralData.type === 'marketer') {
+          await referralService.createMarketerReferral(
+            referralData.referrerId,
+            vendorId,
+            referralData.code,
+            commissionAmount
+          );
+        }
+      }
 
       // Navigate to subscription selection if not free
       if (selectedSubscription === 'free') {

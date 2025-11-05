@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import {
@@ -115,7 +115,12 @@ const mockVendorData: VendorProfile = {
 
 export const VendorProfileScreen: React.FC = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [vendor] = useState<VendorProfile>(mockVendorData);
+
+  const handleContactVendor = () => {
+    navigate(`/chat?vendor=${id}`);
+  };
 
   const renderStars = (rating: number) => {
     return (
@@ -185,7 +190,10 @@ export const VendorProfileScreen: React.FC = () => {
                     </div>
 
                     <div className="flex items-center gap-3 pt-2">
-                      <Button className="bg-primary-500 hover:bg-primary-600 text-white px-6 py-2 rounded-lg font-sans font-semibold">
+                      <Button
+                        onClick={handleContactVendor}
+                        className="bg-primary-500 hover:bg-primary-600 text-white px-6 py-2 rounded-lg font-sans font-semibold"
+                      >
                         Contact Vendor
                       </Button>
                     </div>

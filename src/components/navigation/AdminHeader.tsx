@@ -9,11 +9,13 @@ export const AdminHeader: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const navItems = [
-    { path: '/admin/dashboard', label: 'Dashboard' },
+    { path: '/admin', label: 'Dashboard' },
     { path: '/admin/users', label: 'Users' },
     { path: '/admin/listings', label: 'Listings' },
     { path: '/admin/transactions', label: 'Transactions' },
-    { path: '/admin/kyc-approvals', label: 'KYC Approvals' },
+    { path: '/admin/kyc', label: 'KYC' },
+    { path: '/admin/marketers', label: 'Marketers' },
+    { path: '/admin/commissions', label: 'Commissions' },
   ];
 
   const isActive = (path: string) => location.pathname === path;
