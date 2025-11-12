@@ -1,14 +1,11 @@
 import React, { useState } from 'react';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { PackageIcon, Eye, EyeOff } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase';
 
 export const LoginScreen: React.FC = () => {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const { signIn, profile } = useAuth();
+   const { signIn } = useAuth();
 
   const [formData, setFormData] = useState({
     email: '',
@@ -29,36 +26,9 @@ export const LoginScreen: React.FC = () => {
       setError(signInError.message);
       setLoading(false);
     } else {
-      setTimeout(async () => {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user) {
-          const { data: userProfile } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', session.user.id)
-            .maybeSingle();
-
-          if (userProfile?.role === 'admin') {
-            navigate('/admin', { replace: true });
-          } else if (userProfile?.role === 'vendor') {
-            const { data: vendorData } = await supabase
-              .from('vendors')
-              .select('business_name')
-              .eq('user_id', session.user.id)
-              .maybeSingle();
-
-            if (!vendorData || !vendorData.business_name || vendorData.business_name.trim() === '') {
-              navigate('/vendor/onboarding', { replace: true });
-            } else {
-              navigate('/vendor/dashboard', { replace: true });
-            }
-          } else {
-            const from = (location.state as any)?.from?.pathname || '/';
-            navigate(from, { replace: true });
-          }
-        }
-        setLoading(false);
-      }, 500);
+      // AuthContext will handle profile loading and ProtectedRoute will handle navigation
+      // No manual navigation needed - let the natural auth flow work
+      setLoading(false);
     }
   };
 
