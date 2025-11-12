@@ -58,9 +58,9 @@ interface NotificationState {
 }
 
 export const VendorOnboardingScreen: React.FC = () => {
-  const navigate = useNavigate();
-  const { user, profile } = useAuth();
-  const [searchParams] = useSearchParams();
+   const navigate = useNavigate();
+   const { user, profile } = useAuth();
+   const [searchParams] = useSearchParams();
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [referralData, setReferralData] = useState<{
@@ -126,11 +126,11 @@ export const VendorOnboardingScreen: React.FC = () => {
     setTimeout(() => setNotification(prev => ({ ...prev, visible: false })), 5000);
   }, []);
 
-  // Form validation
-  const validateStep = useCallback((step: number): boolean => {
+  // Form validation - memoized to prevent infinite re-renders
+  const { isStepValid, stepErrors } = React.useMemo(() => {
     const errors: FormErrors = {};
 
-    if (step === 1) {
+    if (currentStep === 1) {
       if (!profileData.businessName.trim()) {
         errors.businessName = 'Business name is required';
       }
@@ -153,9 +153,16 @@ export const VendorOnboardingScreen: React.FC = () => {
       }
     }
 
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
-  }, [profileData]);
+    return {
+      isStepValid: Object.keys(errors).length === 0,
+      stepErrors: errors
+    };
+  }, [currentStep, profileData]);
+
+  // Update form errors when validation changes
+  React.useEffect(() => {
+    setFormErrors(stepErrors);
+  }, [stepErrors]);
 
   const handleMarketLocationSearch = async (query: string) => {
     if (query.length > 2) {
@@ -243,7 +250,7 @@ export const VendorOnboardingScreen: React.FC = () => {
     if (!user || !profile) return;
 
     // Validate current step before proceeding
-    if (!validateStep(currentStep)) {
+    if (!isStepValid) {
       showNotification('error', 'Please fix the errors before proceeding');
       return;
     }
@@ -392,8 +399,8 @@ export const VendorOnboardingScreen: React.FC = () => {
 
 
   const canProceedToNextStep = useCallback(() => {
-    return validateStep(currentStep);
-  }, [currentStep, validateStep]);
+    return isStepValid;
+  }, [isStepValid]);
 
   return (
     <>
@@ -467,7 +474,7 @@ export const VendorOnboardingScreen: React.FC = () => {
             {currentStep < 4 ? (
               <Button
                 onClick={() => {
-                  if (validateStep(currentStep)) {
+                  if (isStepValid) {
                     setCurrentStep(prev => prev + 1);
                   } else {
                     showNotification('error', 'Please fix the errors before proceeding');
