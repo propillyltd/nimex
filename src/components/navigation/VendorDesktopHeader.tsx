@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { PackageIcon, SearchIcon, MessageCircle, Bell, UserIcon } from 'lucide-react';
+import { PackageIcon, MessageCircle, Bell, UserIcon } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -46,13 +46,6 @@ export const VendorDesktopHeader: React.FC = () => {
         </nav>
 
         <div className="flex items-center gap-3">
-          <Button
-            onClick={() => navigate('/vendor/search')}
-            className="bg-green-700 hover:bg-green-800 text-white font-sans text-sm px-6 py-2 rounded-lg flex items-center gap-2"
-          >
-            <SearchIcon className="w-4 h-4" />
-            Search
-          </Button>
           <Button
             onClick={() => navigate('/chat')}
             className="bg-green-700 hover:bg-green-800 text-white font-sans text-sm px-6 py-2 rounded-lg flex items-center gap-2"

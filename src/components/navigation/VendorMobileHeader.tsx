@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { PackageIcon, Bell, User, X, MessageCircle } from 'lucide-react';
+import { PackageIcon, Bell, User, X, MessageCircle, BarChart3, Users, Truck, Wallet, Shield, UserPlus, Settings, Megaphone } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
 export const VendorMobileHeader: React.FC = () => {
@@ -98,37 +98,125 @@ export const VendorMobileHeader: React.FC = () => {
             </div>
 
             <div className="p-2">
-              <button
-                onClick={() => {
-                  navigate('/vendor/settings');
-                  setShowMenu(false);
-                }}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-neutral-50 transition-colors text-left"
-              >
-                <User className="w-5 h-5 text-neutral-600" />
-                <span className="font-sans text-sm text-neutral-900">Account Settings</span>
-              </button>
+              {/* Business Operations */}
+              <div className="mb-3">
+                <p className="px-4 py-2 text-xs font-semibold text-neutral-500 uppercase tracking-wider">Business Operations</p>
+                <button
+                  onClick={() => {
+                    navigate('/vendor/analytics');
+                    setShowMenu(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-neutral-50 transition-colors text-left"
+                >
+                  <BarChart3 className="w-5 h-5 text-neutral-600" />
+                  <span className="font-sans text-sm text-neutral-900">Analytics</span>
+                </button>
+                <button
+                  onClick={() => {
+                    navigate('/vendor/customers');
+                    setShowMenu(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-neutral-50 transition-colors text-left"
+                >
+                  <Users className="w-5 h-5 text-neutral-600" />
+                  <span className="font-sans text-sm text-neutral-900">Customers</span>
+                </button>
+                <button
+                  onClick={() => {
+                    navigate('/vendor/deliveries');
+                    setShowMenu(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-neutral-50 transition-colors text-left"
+                >
+                  <Truck className="w-5 h-5 text-neutral-600" />
+                  <span className="font-sans text-sm text-neutral-900">Deliveries</span>
+                </button>
+              </div>
 
-              <button
-                onClick={() => {
-                  navigate('/');
-                  setShowMenu(false);
-                }}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-neutral-50 transition-colors text-left"
-              >
-                <PackageIcon className="w-5 h-5 text-neutral-600" />
-                <span className="font-sans text-sm text-neutral-900">View Marketplace</span>
-              </button>
+              {/* Financial */}
+              <div className="mb-3">
+                <p className="px-4 py-2 text-xs font-semibold text-neutral-500 uppercase tracking-wider">Financial</p>
+                <button
+                  onClick={() => {
+                    navigate('/vendor/wallet');
+                    setShowMenu(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-neutral-50 transition-colors text-left"
+                >
+                  <Wallet className="w-5 h-5 text-neutral-600" />
+                  <span className="font-sans text-sm text-neutral-900">Wallet</span>
+                </button>
+                <button
+                  onClick={() => {
+                    navigate('/vendor/escrow');
+                    setShowMenu(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-neutral-50 transition-colors text-left"
+                >
+                  <Shield className="w-5 h-5 text-neutral-600" />
+                  <span className="font-sans text-sm text-neutral-900">Escrow</span>
+                </button>
+              </div>
 
-              <div className="my-2 border-t border-neutral-100"></div>
+              {/* Marketing & Growth */}
+              <div className="mb-3">
+                <p className="px-4 py-2 text-xs font-semibold text-neutral-500 uppercase tracking-wider">Marketing & Growth</p>
+                <button
+                  onClick={() => {
+                    navigate('/vendor/ads');
+                    setShowMenu(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-neutral-50 transition-colors text-left"
+                >
+                  <Megaphone className="w-5 h-5 text-neutral-600" />
+                  <span className="font-sans text-sm text-neutral-900">Ads</span>
+                </button>
+                <button
+                  onClick={() => {
+                    navigate('/vendor/referrals');
+                    setShowMenu(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-neutral-50 transition-colors text-left"
+                >
+                  <UserPlus className="w-5 h-5 text-neutral-600" />
+                  <span className="font-sans text-sm text-neutral-900">Referrals</span>
+                </button>
+              </div>
 
-              <button
-                onClick={handleSignOut}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-red-50 transition-colors text-left"
-              >
-                <X className="w-5 h-5 text-red-600" />
-                <span className="font-sans text-sm text-red-600">Sign Out</span>
-              </button>
+              {/* Settings & Account */}
+              <div className="mb-3">
+                <p className="px-4 py-2 text-xs font-semibold text-neutral-500 uppercase tracking-wider">Settings & Account</p>
+                <button
+                  onClick={() => {
+                    navigate('/vendor/settings');
+                    setShowMenu(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-neutral-50 transition-colors text-left"
+                >
+                  <Settings className="w-5 h-5 text-neutral-600" />
+                  <span className="font-sans text-sm text-neutral-900">Settings</span>
+                </button>
+                <button
+                  onClick={() => {
+                    navigate('/');
+                    setShowMenu(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-neutral-50 transition-colors text-left"
+                >
+                  <PackageIcon className="w-5 h-5 text-neutral-600" />
+                  <span className="font-sans text-sm text-neutral-900">View Marketplace</span>
+                </button>
+              </div>
+
+              <div className="border-t border-neutral-100 pt-2">
+                <button
+                  onClick={handleSignOut}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-red-50 transition-colors text-left"
+                >
+                  <X className="w-5 h-5 text-red-600" />
+                  <span className="font-sans text-sm text-red-600">Sign Out</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

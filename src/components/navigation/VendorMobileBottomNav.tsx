@@ -1,16 +1,16 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, User, Package, Megaphone, ShoppingBag } from 'lucide-react';
+import { LayoutDashboard, Package, ShoppingBag, MessageCircle, User } from 'lucide-react';
 
 export const VendorMobileBottomNav: React.FC = () => {
   const location = useLocation();
 
   const navItems = [
     { path: '/vendor/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { path: '/vendor/account', label: 'Account', icon: User },
     { path: '/vendor/products', label: 'Products', icon: Package },
-    { path: '/vendor/ads', label: 'Ads', icon: Megaphone },
     { path: '/vendor/orders', label: 'Orders', icon: ShoppingBag },
+    { path: '/vendor/messages', label: 'Messages', icon: MessageCircle },
+    { path: '/vendor/account', label: 'Account', icon: User },
   ];
 
   return (
