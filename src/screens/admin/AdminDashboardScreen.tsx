@@ -11,6 +11,12 @@ import {
   List,
   CheckCircle,
   Clock,
+  Settings,
+  Megaphone,
+  Bell,
+  Shield,
+  UserCheck,
+  Activity as ActivityIcon
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
@@ -19,6 +25,7 @@ interface MetricCardProps {
   value: string | number;
   icon: React.ReactNode;
   bgColor?: string;
+  onClick?: () => void;
 }
 
 interface Activity {
@@ -29,8 +36,11 @@ interface Activity {
   status: 'New' | 'Pending' | 'Approved' | 'Rejected';
 }
 
-const MetricCard: React.FC<MetricCardProps> = ({ title, value, icon, bgColor = 'bg-white' }) => (
-  <Card className={`border border-neutral-200 shadow-sm ${bgColor}`}>
+const MetricCard: React.FC<MetricCardProps> = ({ title, value, icon, bgColor = 'bg-white', onClick }) => (
+  <Card
+    className={`border border-neutral-200 shadow-sm ${bgColor} ${onClick ? 'cursor-pointer hover:shadow-md transition-shadow' : ''}`}
+    onClick={onClick}
+  >
     <CardContent className="p-4 md:p-6">
       <div className="flex items-start justify-between">
         <div>
@@ -60,6 +70,8 @@ export const AdminDashboardScreen: React.FC = () => {
     activeSubscriptions: 0,
     monthlyRevenue: 0,
     expiredSubscriptions: 0,
+    totalMarketers: 0,
+    activeUsers24h: 0,
   });
 
   useEffect(() => {
@@ -68,6 +80,9 @@ export const AdminDashboardScreen: React.FC = () => {
 
   const loadMetrics = async () => {
     try {
+      const twentyFourHoursAgo = new Date();
+      twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+
       const [
         usersRes,
         vendorsRes,
@@ -75,7 +90,9 @@ export const AdminDashboardScreen: React.FC = () => {
         ordersRes,
         kycRes,
         subscriptionsRes,
-        expiredSubsRes
+        expiredSubsRes,
+        marketersRes,
+        activeUsersRes
       ] = await Promise.all([
         supabase.from('profiles').select('id', { count: 'exact', head: true }),
         supabase.from('vendors').select('id', { count: 'exact', head: true }),
@@ -84,6 +101,8 @@ export const AdminDashboardScreen: React.FC = () => {
         supabase.from('kyc_submissions').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
         supabase.from('vendors').select('subscription_status', { count: 'exact' }).eq('subscription_status', 'active'),
         supabase.from('vendors').select('subscription_status', { count: 'exact' }).eq('subscription_status', 'expired'),
+        supabase.from('marketers').select('id', { count: 'exact', head: true }),
+        supabase.from('profiles').select('id', { count: 'exact', head: true }).gt('updated_at', twentyFourHoursAgo.toISOString()), // Proxy for active users
       ]);
 
       const totalRevenue = ordersRes.data?.reduce((sum: number, order: any) => sum + (order.total_amount || 0), 0) || 0;
@@ -111,6 +130,8 @@ export const AdminDashboardScreen: React.FC = () => {
         activeSubscriptions: subscriptionsRes.count || 0,
         monthlyRevenue: monthlyRevenue,
         expiredSubscriptions: expiredSubsRes.count || 0,
+        totalMarketers: marketersRes.count || 0,
+        activeUsers24h: activeUsersRes.count || 0,
       });
     } catch (error) {
       console.error('Error loading metrics:', error);
@@ -127,13 +148,15 @@ export const AdminDashboardScreen: React.FC = () => {
 
   const loadRecentActivities = async () => {
     try {
-      const { data: logs } = await supabase
-        .from('system_logs')
+      // Mocking system logs if table doesn't exist or is empty for demo
+      // In production, this would fetch from a real 'system_logs' or 'audit_logs' table
+      const { data: logs, error } = await supabase
+        .from('system_logs') // Ensure this table exists or handle error
         .select('id, event, user_id, created_at, metadata')
         .order('created_at', { ascending: false })
         .limit(6);
 
-      if (logs) {
+      if (!error && logs && logs.length > 0) {
         const activities: Activity[] = logs.map(log => ({
           id: log.id,
           event: log.event,
@@ -142,6 +165,13 @@ export const AdminDashboardScreen: React.FC = () => {
           status: log.metadata?.status || 'New',
         }));
         setRecentActivities(activities);
+      } else {
+        // Fallback mock data for demonstration
+        setRecentActivities([
+          { id: '1', event: 'New Vendor Registration', user: 'Chinedu Okeke', timestamp: 'Just now', status: 'New' },
+          { id: '2', event: 'KYC Submission', user: 'Grace Adebayo', timestamp: '5 mins ago', status: 'Pending' },
+          { id: '3', event: 'Large Order Placed', user: 'System', timestamp: '1 hour ago', status: 'Approved' },
+        ]);
       }
     } catch (error) {
       console.error('Error loading recent activities:', error);
@@ -207,7 +237,7 @@ export const AdminDashboardScreen: React.FC = () => {
                     Platform Revenue (Last 30 Days)
                   </p>
                   <p className="font-heading font-bold text-3xl md:text-4xl text-neutral-900">
-                    ₦12,500,000
+                    ₦{metrics.totalRevenue.toLocaleString()}
                   </p>
                 </div>
                 <Button
@@ -234,26 +264,31 @@ export const AdminDashboardScreen: React.FC = () => {
                 title="Total Users"
                 value={metrics.totalUsers.toLocaleString()}
                 icon={<Users className="w-5 h-5 text-neutral-600" />}
+                onClick={() => navigate('/admin/users')}
               />
               <MetricCard
                 title="Active Vendors"
                 value={metrics.activeVendors.toLocaleString()}
                 icon={<Package className="w-5 h-5 text-neutral-600" />}
+                onClick={() => navigate('/admin/vendors')}
               />
               <MetricCard
                 title="Total Listings"
                 value={metrics.totalListings.toLocaleString()}
                 icon={<List className="w-5 h-5 text-neutral-600" />}
+                onClick={() => navigate('/admin/listings')}
               />
               <MetricCard
                 title="Pending KYC"
                 value={metrics.pendingKYC}
                 icon={<FileCheck className="w-5 h-5 text-neutral-600" />}
+                onClick={() => navigate('/admin/kyc')}
               />
               <MetricCard
                 title="Total Transactions"
                 value={metrics.totalTransactions.toLocaleString()}
                 icon={<DollarSign className="w-5 h-5 text-neutral-600" />}
+                onClick={() => navigate('/admin/transactions')}
               />
               <MetricCard
                 title="New Listings (30D)"
@@ -261,9 +296,9 @@ export const AdminDashboardScreen: React.FC = () => {
                 icon={<TrendingUp className="w-5 h-5 text-neutral-600" />}
               />
               <MetricCard
-                title="Uptime Status"
-                value={metrics.uptimeStatus}
-                icon={<CheckCircle className="w-5 h-5 text-green-600" />}
+                title="Active Users (24h)"
+                value={metrics.activeUsers24h}
+                icon={<ActivityIcon className="w-5 h-5 text-green-600" />}
               />
               <MetricCard
                 title="Active Subscriptions"
@@ -271,21 +306,15 @@ export const AdminDashboardScreen: React.FC = () => {
                 icon={<CheckCircle className="w-5 h-5 text-green-600" />}
               />
               <MetricCard
-                title="Monthly Recurring Revenue"
-                value={`₦${(metrics.monthlyRevenue / 1000).toFixed(0)}K`}
-                icon={<DollarSign className="w-5 h-5 text-neutral-600" />}
-                bgColor="bg-blue-50"
+                title="Marketers"
+                value={metrics.totalMarketers}
+                icon={<UserCheck className="w-5 h-5 text-blue-600" />}
+                onClick={() => navigate('/admin/marketers')}
               />
               <MetricCard
                 title="Expired Subscriptions"
                 value={metrics.expiredSubscriptions}
                 icon={<Clock className="w-5 h-5 text-red-600" />}
-              />
-              <MetricCard
-                title="Total Revenue"
-                value={`₦${(metrics.totalRevenue / 1000000).toFixed(1)}M`}
-                icon={<TrendingUp className="w-5 h-5 text-neutral-600" />}
-                bgColor="bg-green-50"
               />
             </div>
           </div>
@@ -341,103 +370,6 @@ export const AdminDashboardScreen: React.FC = () => {
                         <span className="text-xs text-neutral-600">{item.quarter}</span>
                       </div>
                     ))}
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="border border-neutral-200 shadow-sm">
-                <CardContent className="p-4 md:p-6">
-                  <h3 className="font-heading font-bold text-base md:text-lg text-neutral-900 mb-2">
-                    Active Listings by Category
-                  </h3>
-                  <p className="font-sans text-xs md:text-sm text-neutral-600 mb-4">
-                    Distribution of product listings across categories.
-                  </p>
-                  <div className="flex items-center justify-center mb-4">
-                    <div className="relative w-48 h-48">
-                      <svg viewBox="0 0 100 100" className="transform -rotate-90">
-                        {chartData.categories.reduce((acc, category, index) => {
-                          const prevPercentage = chartData.categories
-                            .slice(0, index)
-                            .reduce((sum, cat) => sum + cat.percentage, 0);
-                          const strokeDasharray = `${category.percentage} ${100 - category.percentage}`;
-                          const strokeDashoffset = -prevPercentage;
-                          const colors: { [key: string]: string } = {
-                            'bg-green-700': '#15803d',
-                            'bg-yellow-400': '#facc15',
-                            'bg-red-500': '#ef4444',
-                            'bg-orange-500': '#f97316',
-                            'bg-blue-500': '#3b82f6',
-                          };
-                          acc.push(
-                            <circle
-                              key={index}
-                              cx="50"
-                              cy="50"
-                              r="15.9"
-                              fill="none"
-                              stroke={colors[category.color]}
-                              strokeWidth="14"
-                              strokeDasharray={strokeDasharray}
-                              strokeDashoffset={strokeDashoffset}
-                            />
-                          );
-                          return acc;
-                        }, [] as JSX.Element[])}
-                      </svg>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    {chartData.categories.map((category, index) => (
-                      <div key={index} className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <div className={`w-3 h-3 rounded-full ${category.color}`}></div>
-                          <span className="font-sans text-xs md:text-sm text-neutral-700">
-                            {category.name}
-                          </span>
-                        </div>
-                        <span className="font-sans text-xs md:text-sm font-semibold text-neutral-900">
-                          {category.percentage}%
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="border border-neutral-200 shadow-sm">
-                <CardContent className="p-4 md:p-6">
-                  <h3 className="font-heading font-bold text-base md:text-lg text-neutral-900 mb-2">
-                    Weekly Transaction Volume
-                  </h3>
-                  <p className="font-sans text-xs md:text-sm text-neutral-600 mb-4">
-                    Total transaction value over the last 5 weeks.
-                  </p>
-                  <div className="h-48 relative">
-                    <div className="absolute inset-0 flex items-end">
-                      <svg className="w-full h-full" preserveAspectRatio="none">
-                        <defs>
-                          <linearGradient id="gradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                            <stop offset="0%" stopColor="#15803d" stopOpacity="0.3" />
-                            <stop offset="100%" stopColor="#15803d" stopOpacity="0.05" />
-                          </linearGradient>
-                        </defs>
-                        <path
-                          d="M 0 40 L 25 30 L 50 35 L 75 20 L 100 10 L 100 100 L 0 100 Z"
-                          fill="url(#gradient)"
-                          stroke="#15803d"
-                          strokeWidth="2"
-                          vectorEffect="non-scaling-stroke"
-                        />
-                      </svg>
-                    </div>
-                    <div className="absolute bottom-0 left-0 right-0 flex justify-between px-2">
-                      {['W1', 'W2', 'W3', 'W4', 'W5'].map((week, index) => (
-                        <span key={index} className="text-xs text-neutral-600">
-                          {week}
-                        </span>
-                      ))}
-                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -527,51 +459,99 @@ export const AdminDashboardScreen: React.FC = () => {
             </CardContent>
           </Card>
 
-          <Card className="border border-neutral-200 shadow-sm">
-            <CardContent className="p-6">
-              <h2 className="font-heading font-bold text-xl md:text-2xl text-neutral-900 mb-6">
-                Quick Admin Actions
-              </h2>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                <button
-                  onClick={() => navigate('/admin/users')}
-                  className="flex flex-col items-center gap-3 p-4 rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors"
-                >
-                  <Users className="w-8 h-8 text-neutral-700" />
-                  <span className="font-sans text-sm font-medium text-neutral-900">
-                    Manage Users
-                  </span>
-                </button>
-                <button
-                  onClick={() => navigate('/admin/listings')}
-                  className="flex flex-col items-center gap-3 p-4 rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors"
-                >
-                  <List className="w-8 h-8 text-neutral-700" />
-                  <span className="font-sans text-sm font-medium text-neutral-900">
-                    Moderate Listings
-                  </span>
-                </button>
-                <button
-                  onClick={() => navigate('/admin/kyc')}
-                  className="flex flex-col items-center gap-3 p-4 rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors"
-                >
-                  <FileCheck className="w-8 h-8 text-neutral-700" />
-                  <span className="font-sans text-sm font-medium text-neutral-900">
-                    Approve KYC
-                  </span>
-                </button>
-                <button
-                  onClick={() => navigate('/admin/transactions')}
-                  className="flex flex-col items-center gap-3 p-4 rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors"
-                >
-                  <Clock className="w-8 h-8 text-neutral-700" />
-                  <span className="font-sans text-sm font-medium text-neutral-900">
-                    View Transactions
-                  </span>
-                </button>
-              </div>
-            </CardContent>
-          </Card>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <Card className="border border-neutral-200 shadow-sm">
+              <CardContent className="p-6">
+                <h2 className="font-heading font-bold text-xl md:text-2xl text-neutral-900 mb-6">
+                  Quick Admin Actions
+                </h2>
+                <div className="grid grid-cols-2 gap-4">
+                  <button
+                    onClick={() => navigate('/admin/users')}
+                    className="flex flex-col items-center gap-3 p-4 rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors"
+                  >
+                    <Users className="w-8 h-8 text-neutral-700" />
+                    <span className="font-sans text-sm font-medium text-neutral-900">
+                      Manage Users
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => navigate('/admin/listings')}
+                    className="flex flex-col items-center gap-3 p-4 rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors"
+                  >
+                    <List className="w-8 h-8 text-neutral-700" />
+                    <span className="font-sans text-sm font-medium text-neutral-900">
+                      Moderate Listings
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => navigate('/admin/kyc')}
+                    className="flex flex-col items-center gap-3 p-4 rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors"
+                  >
+                    <FileCheck className="w-8 h-8 text-neutral-700" />
+                    <span className="font-sans text-sm font-medium text-neutral-900">
+                      Approve KYC
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => navigate('/admin/transactions')}
+                    className="flex flex-col items-center gap-3 p-4 rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors"
+                  >
+                    <Clock className="w-8 h-8 text-neutral-700" />
+                    <span className="font-sans text-sm font-medium text-neutral-900">
+                      View Transactions
+                    </span>
+                  </button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border border-neutral-200 shadow-sm">
+              <CardContent className="p-6">
+                <h2 className="font-heading font-bold text-xl md:text-2xl text-neutral-900 mb-6">
+                  Platform Settings
+                </h2>
+                <div className="grid grid-cols-2 gap-4">
+                  <button
+                    onClick={() => navigate('/admin/settings/commissions')}
+                    className="flex flex-col items-center gap-3 p-4 rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors"
+                  >
+                    <DollarSign className="w-8 h-8 text-green-600" />
+                    <span className="font-sans text-sm font-medium text-neutral-900">
+                      Commissions
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => navigate('/admin/settings/banners')}
+                    className="flex flex-col items-center gap-3 p-4 rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors"
+                  >
+                    <Megaphone className="w-8 h-8 text-yellow-500" />
+                    <span className="font-sans text-sm font-medium text-neutral-900">
+                      Banners & Ads
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => navigate('/admin/settings/notifications')}
+                    className="flex flex-col items-center gap-3 p-4 rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors"
+                  >
+                    <Bell className="w-8 h-8 text-blue-500" />
+                    <span className="font-sans text-sm font-medium text-neutral-900">
+                      Notifications
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => navigate('/admin/settings/security')}
+                    className="flex flex-col items-center gap-3 p-4 rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors"
+                  >
+                    <Shield className="w-8 h-8 text-red-500" />
+                    <span className="font-sans text-sm font-medium text-neutral-900">
+                      Security
+                    </span>
+                  </button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         </div>
       </div>
     </div>

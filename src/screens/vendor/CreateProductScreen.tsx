@@ -12,6 +12,15 @@ interface Category {
   name: string;
 }
 
+const PREDEFINED_TAGS = [
+  { id: 'trending', label: 'Trending' },
+  { id: 'verified', label: 'Verified' },
+  { id: 'urgent', label: 'Urgent' },
+  { id: 'new_arrival', label: 'New Arrival' },
+  { id: 'limited_stock', label: 'Limited Stock' },
+  { id: 'hot_deal', label: 'Hot Deal' },
+];
+
 export const CreateProductScreen: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -27,6 +36,7 @@ export const CreateProductScreen: React.FC = () => {
     name: '',
     description: '',
     price: '',
+    compare_at_price: '',
     stock_quantity: '',
     category_id: '',
     image_url: '',
@@ -72,14 +82,18 @@ export const CreateProductScreen: React.FC = () => {
 
       if (product) {
         setFormData({
-          name: product.name,
+          name: product.title || product.name, // Handle potential schema difference
           description: product.description || '',
           price: product.price.toString(),
+          compare_at_price: product.compare_at_price?.toString() || '',
           stock_quantity: product.stock_quantity.toString(),
           category_id: product.category_id || '',
-          image_url: product.image_url || '',
+          image_url: typeof product.images === 'string' ? product.images : (product.images as any)?.url || '', // Handle JSON or string
           tags: product.product_tags?.map((pt: any) => pt.tag) || [],
         });
+
+        const img = typeof product.images === 'string' ? product.images : (product.images as any)?.url;
+        if (img) setImagePreview(img);
       }
     } catch (err: any) {
       setError('Failed to load product for editing');
@@ -92,6 +106,15 @@ export const CreateProductScreen: React.FC = () => {
   const handleImageUrlChange = (url: string) => {
     setFormData({ ...formData, image_url: url });
     setImagePreview(url);
+  };
+
+  const handleTagToggle = (tagId: string) => {
+    setFormData(prev => {
+      const newTags = prev.tags.includes(tagId)
+        ? prev.tags.filter(t => t !== tagId)
+        : [...prev.tags, tagId];
+      return { ...prev, tags: newTags };
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -115,18 +138,23 @@ export const CreateProductScreen: React.FC = () => {
 
       let product;
 
+      const productData = {
+        title: formData.name, // Schema uses title
+        name: formData.name, // Keep for compatibility if schema is mixed
+        description: formData.description || null,
+        price: parseFloat(formData.price),
+        compare_at_price: formData.compare_at_price ? parseFloat(formData.compare_at_price) : null,
+        stock_quantity: parseInt(formData.stock_quantity),
+        category_id: formData.category_id || null,
+        images: formData.image_url, // Storing as string for now, or object if needed
+        image_url: formData.image_url, // Keep for compatibility
+      };
+
       if (isEditing && id) {
         // Update existing product
         const { data: updatedProduct, error: updateError } = await supabase
           .from('products')
-          .update({
-            name: formData.name,
-            description: formData.description || null,
-            price: parseFloat(formData.price),
-            stock_quantity: parseInt(formData.stock_quantity),
-            category_id: formData.category_id || null,
-            image_url: formData.image_url || null,
-          })
+          .update(productData)
           .eq('id', id)
           .select()
           .single();
@@ -139,26 +167,15 @@ export const CreateProductScreen: React.FC = () => {
           .from('products')
           .insert({
             vendor_id: vendor.id,
-            name: formData.name,
-            description: formData.description || null,
-            price: parseFloat(formData.price),
-            stock_quantity: parseInt(formData.stock_quantity),
-            category_id: formData.category_id || null,
-            image_url: formData.image_url || null,
-            is_active: true,
+            ...productData,
+            status: 'active', // Schema uses status
+            is_active: true, // Keep for compatibility
           })
           .select()
           .single();
 
         if (createError) throw createError;
         product = newProduct;
-      }
-
-      if (isEditing && id) {
-        // For updates, we already have the product from the update operation
-      } else {
-        // For creates, check for error
-        if (createError) throw createError;
       }
 
       // Handle tags for both create and update
@@ -194,6 +211,10 @@ export const CreateProductScreen: React.FC = () => {
       setLoading(false);
     }
   };
+
+  const discountPercentage = formData.price && formData.compare_at_price
+    ? Math.round(((parseFloat(formData.compare_at_price) - parseFloat(formData.price)) / parseFloat(formData.compare_at_price)) * 100)
+    : 0;
 
   return (
     <div className="w-full min-h-screen bg-neutral-50">
@@ -267,7 +288,7 @@ export const CreateProductScreen: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
                   <div>
                     <label className="block font-sans font-medium text-xs md:text-sm text-neutral-700 mb-1 md:mb-2">
-                      Price (₦) *
+                      Selling Price (₦) *
                     </label>
                     <input
                       type="number"
@@ -283,6 +304,28 @@ export const CreateProductScreen: React.FC = () => {
 
                   <div>
                     <label className="block font-sans font-medium text-xs md:text-sm text-neutral-700 mb-1 md:mb-2">
+                      Original Price (₦) <span className="text-neutral-400 font-normal">(Optional)</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={formData.compare_at_price}
+                      onChange={(e) => setFormData({ ...formData, compare_at_price: e.target.value })}
+                      min="0"
+                      step="0.01"
+                      className="w-full h-10 md:h-12 px-3 md:px-4 rounded-lg border border-neutral-200 font-sans text-sm md:text-base text-neutral-900 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      placeholder="0.00"
+                    />
+                    {discountPercentage > 0 && (
+                      <p className="text-xs text-green-600 mt-1">
+                        {discountPercentage}% off
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+                  <div>
+                    <label className="block font-sans font-medium text-xs md:text-sm text-neutral-700 mb-1 md:mb-2">
                       Stock Quantity *
                     </label>
                     <input
@@ -295,24 +338,24 @@ export const CreateProductScreen: React.FC = () => {
                       placeholder="0"
                     />
                   </div>
-                </div>
 
-                <div>
-                  <label className="block font-sans font-medium text-xs md:text-sm text-neutral-700 mb-1 md:mb-2">
-                    Category
-                  </label>
-                  <select
-                    value={formData.category_id}
-                    onChange={(e) => setFormData({ ...formData, category_id: e.target.value })}
-                    className="w-full h-10 md:h-12 px-3 md:px-4 rounded-lg border border-neutral-200 font-sans text-sm md:text-base text-neutral-900 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  >
-                    <option value="">Select a category</option>
-                    {categories.map((category) => (
-                      <option key={category.id} value={category.id}>
-                        {category.name}
-                      </option>
-                    ))}
-                  </select>
+                  <div>
+                    <label className="block font-sans font-medium text-xs md:text-sm text-neutral-700 mb-1 md:mb-2">
+                      Category
+                    </label>
+                    <select
+                      value={formData.category_id}
+                      onChange={(e) => setFormData({ ...formData, category_id: e.target.value })}
+                      className="w-full h-10 md:h-12 px-3 md:px-4 rounded-lg border border-neutral-200 font-sans text-sm md:text-base text-neutral-900 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    >
+                      <option value="">Select a category</option>
+                      {categories.map((category) => (
+                        <option key={category.id} value={category.id}>
+                          {category.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 <div>
@@ -354,12 +397,31 @@ export const CreateProductScreen: React.FC = () => {
                   <label className="block font-sans font-medium text-xs md:text-sm text-neutral-700 mb-1 md:mb-2">
                     Product Tags
                   </label>
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {PREDEFINED_TAGS.map(tag => (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        onClick={() => handleTagToggle(tag.id)}
+                        className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${formData.tags.includes(tag.id)
+                            ? 'bg-primary-50 border-primary-200 text-primary-700'
+                            : 'bg-white border-neutral-200 text-neutral-600 hover:border-neutral-300'
+                          }`}
+                      >
+                        {tag.label}
+                      </button>
+                    ))}
+                  </div>
                   <ProductTagsInput
-                    tags={formData.tags}
-                    onChange={(tags) => setFormData({ ...formData, tags })}
+                    tags={formData.tags.filter(t => !PREDEFINED_TAGS.find(pt => pt.id === t))}
+                    onChange={(customTags) => {
+                      // Merge custom tags with selected predefined tags
+                      const predefined = formData.tags.filter(t => PREDEFINED_TAGS.find(pt => pt.id === t));
+                      setFormData({ ...formData, tags: [...predefined, ...customTags] });
+                    }}
                   />
                   <p className="font-sans text-xs text-neutral-500 mt-1">
-                    Add tags to help customers find your product
+                    Select from tags or type to add custom ones
                   </p>
                 </div>
               </CardContent>
@@ -381,12 +443,12 @@ export const CreateProductScreen: React.FC = () => {
                 {loading ? (
                   <>
                     <Loader2 className="w-4 h-4 md:w-5 md:h-5 animate-spin" />
-                    Creating...
+                    {isEditing ? 'Updating...' : 'Creating...'}
                   </>
                 ) : (
                   <>
                     <Save className="w-4 h-4 md:w-5 md:h-5" />
-                    Create Product
+                    {isEditing ? 'Update Product' : 'Create Product'}
                   </>
                 )}
               </Button>

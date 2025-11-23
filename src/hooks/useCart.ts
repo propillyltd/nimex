@@ -1,27 +1,16 @@
 import { useState, useEffect } from 'react';
-
-interface CartItem {
-  id: string;
-  product_id: string;
-  quantity: number;
-}
+import { CartService } from '../services/cartService';
 
 export const useCart = () => {
   const [itemCount, setItemCount] = useState(0);
 
-  const updateCartCount = () => {
+  const updateCartCount = async () => {
     try {
-      const cartJson = localStorage.getItem('nimex_cart');
-      if (cartJson) {
-        const cart: CartItem[] = JSON.parse(cartJson);
-        const total = cart.reduce((sum, item) => sum + item.quantity, 0);
-        setItemCount(total);
-      } else {
-        setItemCount(0);
-      }
+      const count = await CartService.getCartCount();
+      setItemCount(count);
     } catch (error) {
-      console.error('Error reading cart:', error);
-      setItemCount(0);
+      console.error('Error reading cart count:', error);
+      // Don't reset to 0 on error, keep previous state or handle gracefully
     }
   };
 
@@ -29,16 +18,7 @@ export const useCart = () => {
     // Initial load
     updateCartCount();
 
-    // Listen for storage changes from other tabs/windows
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'nimex_cart') {
-        updateCartCount();
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-
-    // Also listen for custom cart update events
+    // Listen for custom cart update events
     const handleCartUpdate = () => {
       updateCartCount();
     };
@@ -46,7 +26,6 @@ export const useCart = () => {
     window.addEventListener('cartUpdated', handleCartUpdate);
 
     return () => {
-      window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('cartUpdated', handleCartUpdate);
     };
   }, []);

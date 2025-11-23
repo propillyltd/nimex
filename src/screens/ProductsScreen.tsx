@@ -1,35 +1,19 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { useToast } from '../contexts/ToastContext';
 import {
   SlidersHorizontal,
-  Star,
-  ShoppingCart,
-  Heart,
   ChevronDown,
-  X,
-  SearchIcon,
+  Star
 } from 'lucide-react';
 import { triggerCartUpdate } from '../hooks/useCart';
+import { CartService } from '../services/cartService';
+import { ProductCard, Product } from '../components/products/ProductCard';
 
-interface Product {
-  id: number;
-  name: string;
-  price: number;
-  originalPrice?: number;
-  image: string;
-  vendor: string;
-  vendorId: number;
-  rating: number;
-  reviews: number;
-  category: string;
-  inStock: boolean;
-  discount?: number;
-}
-
+// Extended mock products with more data for testing features
 const mockProducts: Product[] = [
   {
     id: 1,
@@ -37,6 +21,7 @@ const mockProducts: Product[] = [
     price: 8500,
     originalPrice: 12000,
     image: '/image-1.png',
+    images: ['/image-1.png', '/image-2.png'],
     vendor: 'NaijaCrafts Emporium',
     vendorId: 1,
     rating: 4.8,
@@ -44,18 +29,21 @@ const mockProducts: Product[] = [
     category: 'Textiles',
     inStock: true,
     discount: 29,
+    tags: ['hot', 'deal']
   },
   {
     id: 2,
     name: 'Traditional Clay Pottery Set',
     price: 15000,
     image: '/image-2.png',
+    images: ['/image-2.png', '/image-3.png'],
     vendor: 'NaijaCrafts Emporium',
     vendorId: 1,
     rating: 4.9,
     reviews: 89,
     category: 'Home & Garden',
     inStock: true,
+    tags: ['new']
   },
   {
     id: 3,
@@ -63,6 +51,7 @@ const mockProducts: Product[] = [
     price: 6500,
     originalPrice: 9000,
     image: '/image-3.png',
+    images: ['/image-3.png', '/image-1.png'],
     vendor: 'Fashion Finesse Boutique',
     vendorId: 3,
     rating: 4.7,
@@ -70,6 +59,7 @@ const mockProducts: Product[] = [
     category: 'Fashion',
     inStock: true,
     discount: 28,
+    tags: ['trending']
   },
   {
     id: 4,
@@ -94,6 +84,7 @@ const mockProducts: Product[] = [
     reviews: 412,
     category: 'Food',
     inStock: true,
+    tags: ['urgent']
   },
   {
     id: 6,
@@ -134,6 +125,7 @@ const mockProducts: Product[] = [
     category: 'Electronics',
     inStock: true,
     discount: 28,
+    tags: ['hot']
   },
   {
     id: 9,
@@ -185,7 +177,7 @@ const mockProducts: Product[] = [
   },
 ];
 
-const categories = ['All', 'Fashion', 'Electronics', 'Food', 'Books', 'Home & Garden', 'Textiles', 'Art'];
+const categories = ['All', 'Fashion', 'Electronics', 'Food', 'Books', 'Home & Garden', 'Textiles', 'Art', 'Real Estate', 'Vehicles', 'Building Materials', 'Health & Wellness'];
 
 const priceRanges = [
   { label: 'All Prices', min: 0, max: Infinity },
@@ -205,7 +197,9 @@ const sortOptions = [
 
 export const ProductsScreen: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { success } = useToast();
+
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [selectedPriceRange, setSelectedPriceRange] = useState(0);
   const [minRating, setMinRating] = useState(0);
@@ -213,8 +207,41 @@ export const ProductsScreen: React.FC = () => {
   const [showFilters, setShowFilters] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Initialize filters from URL params
+  useEffect(() => {
+    const categoryParam = searchParams.get('category');
+    if (categoryParam) {
+      // Check if category exists in our list, if not add it temporarily or match closest
+      // For now, we just set it if it matches loosely or default to All
+      const match = categories.find(c => c.toLowerCase() === categoryParam.toLowerCase());
+      if (match) {
+        setSelectedCategory(match);
+      } else {
+        // If it's a valid category but not in our short list, we might want to handle it
+        // For this demo, we'll just set it if it's not empty
+        if (categoryParam !== 'All') setSelectedCategory(categoryParam);
+      }
+    }
+
+    const searchParam = searchParams.get('search');
+    if (searchParam) {
+      setSearchQuery(searchParam);
+    }
+  }, [searchParams]);
+
+  // Update URL when category changes
+  const handleCategoryChange = (category: string) => {
+    setSelectedCategory(category);
+    if (category === 'All') {
+      searchParams.delete('category');
+    } else {
+      searchParams.set('category', category);
+    }
+    setSearchParams(searchParams);
+  };
+
   const filteredProducts = mockProducts.filter((product) => {
-    const categoryMatch = selectedCategory === 'All' || product.category === selectedCategory;
+    const categoryMatch = selectedCategory === 'All' || product.category === selectedCategory || (selectedCategory === 'Fashion & Beauty' && product.category === 'Fashion'); // Simple mapping for demo
     const priceRange = priceRanges[selectedPriceRange];
     const priceMatch = product.price >= priceRange.min && product.price <= priceRange.max;
     const ratingMatch = product.rating >= minRating;
@@ -240,72 +267,24 @@ export const ProductsScreen: React.FC = () => {
     }
   });
 
-  const handleAddToCart = (productId: number, e: React.MouseEvent) => {
+  const handleAddToCart = (e: React.MouseEvent) => {
     e.stopPropagation();
+    // In a real app, we'd pass the specific product here
+    // For now, the ProductCard handles the click event but we need to implement the actual cart logic
+    // This function is just a placeholder if we were to pass it down
+  };
 
-    const product = mockProducts.find(p => p.id === productId);
-    if (!product) return;
-
-    // Get existing cart from localStorage
-    const cartJson = localStorage.getItem('nimex_cart');
-    const existingCart = cartJson ? JSON.parse(cartJson) : [];
-
-    // Create cart item
-    const cartItem = {
-      id: Date.now().toString(),
-      product_id: product.id.toString(),
-      title: product.name,
-      price: product.price,
-      image: product.image,
-      vendor_id: product.vendorId.toString(),
-      vendor_name: product.vendor,
-      quantity: 1
-    };
-
-    // Check if product already in cart
-    const existingIndex = existingCart.findIndex((item: any) => item.product_id === product.id.toString());
-
-    if (existingIndex >= 0) {
-      // Update quantity
-      existingCart[existingIndex].quantity += 1;
-    } else {
-      // Add new item
-      existingCart.push(cartItem);
+  const addToCartLogic = async (product: Product) => {
+    try {
+      await CartService.addToCart(product.id.toString(), 1);
+      success(`${product.name} added to cart!`);
+      triggerCartUpdate();
+    } catch (error) {
+      console.error('Error adding to cart:', error);
+      // In a real app, we would show an error toast here
+      // error('Failed to add to cart');
     }
-
-    // Save to localStorage
-    localStorage.setItem('nimex_cart', JSON.stringify(existingCart));
-
-    // Show feedback
-    success(`${product.name} added to cart!`);
-    triggerCartUpdate();
-  };
-
-  const handleProductClick = (productId: number) => {
-    navigate(`/product/${productId}`);
-  };
-
-  const handleVendorClick = (vendorId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    navigate(`/vendor/${vendorId}`);
-  };
-
-  const renderStars = (rating: number) => {
-    return (
-      <div className="flex items-center gap-0.5">
-        {[...Array(5)].map((_, i) => (
-          <Star
-            key={i}
-            className={`w-3.5 h-3.5 ${
-              i < Math.floor(rating)
-                ? 'text-accent-yellow fill-accent-yellow'
-                : 'text-neutral-300'
-            }`}
-          />
-        ))}
-      </div>
-    );
-  };
+  }
 
   const activeFiltersCount =
     (selectedCategory !== 'All' ? 1 : 0) +
@@ -319,7 +298,7 @@ export const ProductsScreen: React.FC = () => {
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <h1 className="font-heading font-bold text-neutral-900 text-2xl md:text-3xl">
-                All Products
+                {selectedCategory === 'All' ? 'All Products' : selectedCategory}
               </h1>
               <p className="font-sans text-neutral-600 text-sm mt-1">
                 {sortedProducts.length} products available
@@ -369,7 +348,7 @@ export const ProductsScreen: React.FC = () => {
                     {activeFiltersCount > 0 && (
                       <button
                         onClick={() => {
-                          setSelectedCategory('All');
+                          handleCategoryChange('All');
                           setSelectedPriceRange(0);
                           setMinRating(0);
                         }}
@@ -395,7 +374,7 @@ export const ProductsScreen: React.FC = () => {
                               type="radio"
                               name="category"
                               checked={selectedCategory === category}
-                              onChange={() => setSelectedCategory(category)}
+                              onChange={() => handleCategoryChange(category)}
                               className="w-4 h-4 text-primary-500 focus:ring-primary-500 cursor-pointer"
                             />
                             <span className="font-sans text-sm text-neutral-700 group-hover:text-primary-500">
@@ -458,7 +437,7 @@ export const ProductsScreen: React.FC = () => {
                                   <span className="font-sans text-sm text-neutral-700 group-hover:text-primary-500">
                                     {rating}+
                                   </span>
-                                  <Star className="w-4 h-4 text-accent-yellow fill-accent-yellow" />
+                                  <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />
                                 </>
                               )}
                             </div>
@@ -480,7 +459,7 @@ export const ProductsScreen: React.FC = () => {
                     </p>
                     <Button
                       onClick={() => {
-                        setSelectedCategory('All');
+                        handleCategoryChange('All');
                         setSelectedPriceRange(0);
                         setMinRating(0);
                       }}
@@ -493,75 +472,19 @@ export const ProductsScreen: React.FC = () => {
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                   {sortedProducts.map((product) => (
-                    <Card
-                      key={product.id}
-                      onClick={() => handleProductClick(product.id)}
-                      className="border border-neutral-200 shadow-sm hover:shadow-lg hover:border-primary-200 transition-all cursor-pointer group"
-                    >
-                      <CardContent className="p-0">
-                        <div className="relative overflow-hidden">
-                          <img
-                            src={product.image}
-                            alt={product.name}
-                            className="w-full h-56 object-cover group-hover:scale-105 transition-transform duration-300"
-                          />
-                          {product.discount && (
-                            <Badge className="absolute top-3 left-3 bg-red-500 text-white font-sans font-semibold">
-                              -{product.discount}%
-                            </Badge>
-                          )}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              console.log('Added to wishlist:', product.id);
-                            }}
-                            className="absolute top-3 right-3 w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-md hover:bg-primary-50 transition-colors"
-                          >
-                            <Heart className="w-5 h-5 text-neutral-600" />
-                          </button>
-                        </div>
-
-                        <div className="p-4 flex flex-col gap-3">
-                          <div className="flex flex-col gap-1">
-                            <h3 className="font-heading font-bold text-neutral-900 text-base line-clamp-1">
-                              {product.name}
-                            </h3>
-                            <button
-                              onClick={(e) => handleVendorClick(product.vendorId, e)}
-                              className="font-sans text-xs text-primary-500 hover:text-primary-600 text-left"
-                            >
-                              {product.vendor}
-                            </button>
-                          </div>
-
-                          <div className="flex items-center gap-2">
-                            {renderStars(product.rating)}
-                            <span className="font-sans text-xs text-neutral-600">
-                              ({product.reviews})
-                            </span>
-                          </div>
-
-                          <div className="flex items-center gap-2">
-                            <span className="font-heading font-bold text-neutral-900 text-xl">
-                              ₦{product.price.toLocaleString()}
-                            </span>
-                            {product.originalPrice && (
-                              <span className="font-sans text-sm text-neutral-400 line-through">
-                                ₦{product.originalPrice.toLocaleString()}
-                              </span>
-                            )}
-                          </div>
-
-                          <Button
-                            onClick={(e) => handleAddToCart(product.id, e)}
-                            className="w-full bg-primary-500 hover:bg-primary-600 text-white font-sans font-semibold text-sm py-2.5 rounded-lg flex items-center justify-center gap-2"
-                          >
-                            <ShoppingCart className="w-4 h-4" />
-                            Add to Cart
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
+                    <div key={product.id} className="h-full">
+                      <ProductCard
+                        product={product}
+                        onAddToCart={(e) => {
+                          e.stopPropagation();
+                          addToCartLogic(product);
+                        }}
+                        onToggleWishlist={(e) => {
+                          e.stopPropagation();
+                          console.log('Wishlist toggled for', product.id);
+                        }}
+                      />
+                    </div>
                   ))}
                 </div>
               )}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import {
@@ -7,127 +7,159 @@ import {
   ShoppingCart,
   MessageSquare,
   Package,
-  TrendingUp,
   ExternalLink,
   MessageCircle,
+  Loader2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
+import { supabase } from '../../lib/supabase';
 
 interface Order {
   id: string;
-  item: string;
-  amount: string;
-  status: 'delivered' | 'shipped' | 'processing' | 'pending';
-  date: string;
+  order_number: string;
+  total_amount: number;
+  status: 'delivered' | 'shipped' | 'processing' | 'pending' | 'cancelled' | 'disputed';
+  created_at: string;
 }
 
 interface Message {
   id: string;
-  text: string;
+  last_message: string;
+  unread_vendor: number;
 }
 
-interface SalesData {
-  month: string;
-  value: number;
+interface DashboardMetrics {
+  earnings: number;
+  totalOrders: number;
+  unreadMessages: number;
+  totalProducts: number;
 }
-
-interface TopProduct {
-  name: string;
-  sales: number;
-  color: string;
-}
-
-const mockOrders: Order[] = [
-  {
-    id: 'NMX001',
-    item: 'Organic Honey',
-    amount: '₦5,000',
-    status: 'delivered',
-    date: '2024-07-28',
-  },
-  {
-    id: 'NMX002',
-    item: 'Handmade Pottery Mug',
-    amount: '₦2,500',
-    status: 'shipped',
-    date: '2024-07-27',
-  },
-  {
-    id: 'NMX003',
-    item: 'Shea Butter Soap (Set)',
-    amount: '₦7,500',
-    status: 'processing',
-    date: '2024-07-27',
-  },
-  {
-    id: 'NMX004',
-    item: 'Nigerian Street Food Kit',
-    amount: '₦12,000',
-    status: 'pending',
-    date: '2024-07-26',
-  },
-  {
-    id: 'NMX005',
-    item: 'Ancestral Wooden Carving',
-    amount: '₦25,000',
-    status: 'delivered',
-    date: '2024-07-26',
-  },
-];
-
-const mockMessages: Message[] = [
-  { id: '1', text: 'Customer inquiry about product availability.' },
-  { id: '2', text: 'New message regarding order NMX004.' },
-];
-
-const salesData: SalesData[] = [
-  { month: 'Jan', value: 8000 },
-  { month: 'Feb', value: 17000 },
-  { month: 'Mar', value: 21000 },
-  { month: 'Apr', value: 18000 },
-  { month: 'May', value: 23000 },
-  { month: 'Jun', value: 28000 },
-  { month: 'Jul', value: 26000 },
-  { month: 'Aug', value: 30000 },
-];
-
-const topProducts: TopProduct[] = [
-  { name: 'Organic Palm Oil', sales: 450, color: 'bg-green-700' },
-  { name: 'Handmade Adire Fabric', sales: 380, color: 'bg-yellow-500' },
-  { name: 'Spicy Suya Seasoning', sales: 320, color: 'bg-red-400' },
-  { name: 'Beaded Jewellery', sales: 280, color: 'bg-yellow-600' },
-];
-
-const orderStatusData = [
-  { status: 'Pending', count: 5, color: 'bg-yellow-500', percentage: 12 },
-  { status: 'Processing', count: 8, color: 'bg-red-400', percentage: 20 },
-  { status: 'Shipped', count: 12, color: 'bg-green-600', percentage: 30 },
-  { status: 'Delivered', count: 18, color: 'bg-green-800', percentage: 45 },
-  { status: 'Cancelled', count: 2, color: 'bg-purple-600', percentage: 5 },
-];
 
 export const VendorDashboardScreen: React.FC = () => {
-   console.log('VendorDashboardScreen: Component rendering');
-   const navigate = useNavigate();
-   const [orders] = useState<Order[]>(mockOrders);
-   const [messages] = useState<Message[]>(mockMessages);
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const [metrics, setMetrics] = useState<DashboardMetrics>({
+    earnings: 0,
+    totalOrders: 0,
+    unreadMessages: 0,
+    totalProducts: 0,
+  });
+  const [recentOrders, setRecentOrders] = useState<Order[]>([]);
+  const [unreadMessagesList, setUnreadMessagesList] = useState<Message[]>([]);
+  const [topProducts, setTopProducts] = useState<any[]>([]);
+  const [orderStatusCounts, setOrderStatusCounts] = useState<Record<string, number>>({});
 
-  const getStatusColor = (status: Order['status']) => {
-    switch (status) {
-      case 'delivered':
-        return 'bg-green-600 text-white';
-      case 'shipped':
-        return 'bg-green-600 text-white';
-      case 'processing':
-        return 'bg-yellow-500 text-neutral-900';
-      case 'pending':
-        return 'bg-neutral-200 text-neutral-700';
-      default:
-        return 'bg-neutral-200 text-neutral-700';
+  useEffect(() => {
+    if (user) {
+      fetchDashboardData();
+    }
+  }, [user]);
+
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+
+      // Get vendor ID
+      const { data: vendor, error: vendorError } = await supabase
+        .from('vendors')
+        .select('id, wallet_balance')
+        .eq('user_id', user!.id)
+        .single();
+
+      if (vendorError) throw vendorError;
+      if (!vendor) return;
+
+      // Fetch Orders
+      const { data: orders, error: ordersError } = await supabase
+        .from('orders')
+        .select('id, order_number, total_amount, status, created_at')
+        .eq('vendor_id', vendor.id)
+        .order('created_at', { ascending: false });
+
+      if (ordersError) throw ordersError;
+
+      // Fetch Products Count & Top Viewed
+      const { data: products, error: productsError } = await supabase
+        .from('products')
+        .select('id, title, views_count')
+        .eq('vendor_id', vendor.id)
+        .order('views_count', { ascending: false })
+        .limit(5);
+
+      if (productsError) throw productsError;
+
+      const { count: productsCount, error: countError } = await supabase
+        .from('products')
+        .select('*', { count: 'exact', head: true })
+        .eq('vendor_id', vendor.id);
+
+      if (countError) throw countError;
+
+      // Fetch Unread Messages
+      const { data: conversations, error: messagesError } = await supabase
+        .from('chat_conversations')
+        .select('id, last_message, unread_vendor')
+        .eq('vendor_id', vendor.id)
+        .gt('unread_vendor', 0)
+        .limit(3);
+
+      if (messagesError) throw messagesError;
+
+      // Process Data
+      const statusCounts = orders?.reduce((acc: any, order) => {
+        acc[order.status] = (acc[order.status] || 0) + 1;
+        return acc;
+      }, {}) || {};
+
+      setMetrics({
+        earnings: vendor.wallet_balance || 0,
+        totalOrders: orders?.length || 0,
+        unreadMessages: conversations?.length || 0,
+        totalProducts: productsCount || 0,
+      });
+
+      setRecentOrders(orders?.slice(0, 5) || []);
+      setUnreadMessagesList(conversations || []);
+      setTopProducts(products || []);
+      setOrderStatusCounts(statusCounts);
+
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const maxSales = Math.max(...salesData.map((d) => d.value));
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'delivered': return 'bg-green-600 text-white';
+      case 'shipped': return 'bg-blue-600 text-white';
+      case 'processing': return 'bg-yellow-500 text-neutral-900';
+      case 'pending': return 'bg-neutral-200 text-neutral-700';
+      case 'cancelled': return 'bg-red-500 text-white';
+      default: return 'bg-neutral-200 text-neutral-700';
+    }
+  };
+
+  const orderStatusData = [
+    { status: 'Pending', count: orderStatusCounts['pending'] || 0, color: 'bg-yellow-500' },
+    { status: 'Processing', count: orderStatusCounts['processing'] || 0, color: 'bg-blue-400' },
+    { status: 'Shipped', count: orderStatusCounts['shipped'] || 0, color: 'bg-indigo-500' },
+    { status: 'Delivered', count: orderStatusCounts['delivered'] || 0, color: 'bg-green-600' },
+    { status: 'Cancelled', count: orderStatusCounts['cancelled'] || 0, color: 'bg-red-500' },
+  ].filter(item => item.count > 0);
+
+  const totalOrdersForChart = orderStatusData.reduce((sum, item) => sum + item.count, 0);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-neutral-50">
+        <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col w-full min-h-screen bg-neutral-50">
@@ -137,7 +169,10 @@ export const VendorDashboardScreen: React.FC = () => {
             <h1 className="font-heading font-bold text-neutral-900 text-lg md:text-3xl">
               Dashboard
             </h1>
-            <Button className="bg-green-700 hover:bg-green-800 text-white px-3 py-2 md:px-6 md:py-2 rounded-lg flex items-center gap-1 md:gap-2 text-xs md:text-sm">
+            <Button
+              onClick={() => navigate('/vendor/products/create')}
+              className="bg-green-700 hover:bg-green-800 text-white px-3 py-2 md:px-6 md:py-2 rounded-lg flex items-center gap-1 md:gap-2 text-xs md:text-sm"
+            >
               <Plus className="w-3 h-3 md:w-4 md:h-4" />
               <span className="hidden sm:inline">Create New Listing</span>
               <span className="sm:hidden">New</span>
@@ -156,10 +191,7 @@ export const VendorDashboardScreen: React.FC = () => {
                       </span>
                     </div>
                     <span className="font-heading font-bold text-neutral-900 text-lg md:text-3xl">
-                      ₦1.5M
-                    </span>
-                    <span className="font-sans text-xs text-green-700">
-                      +12%
+                      ₦{metrics.earnings.toLocaleString()}
                     </span>
                   </div>
                 </div>
@@ -177,10 +209,7 @@ export const VendorDashboardScreen: React.FC = () => {
                       </span>
                     </div>
                     <span className="font-heading font-bold text-neutral-900 text-lg md:text-3xl">
-                      45
-                    </span>
-                    <span className="font-sans text-xs text-neutral-600">
-                      +5 today
+                      {metrics.totalOrders}
                     </span>
                   </div>
                 </div>
@@ -198,11 +227,13 @@ export const VendorDashboardScreen: React.FC = () => {
                       </span>
                     </div>
                     <span className="font-heading font-bold text-neutral-900 text-lg md:text-3xl">
-                      3
+                      {metrics.unreadMessages}
                     </span>
-                    <span className="font-sans text-xs text-neutral-600">
-                      Urgent inquiries
-                    </span>
+                    {metrics.unreadMessages > 0 && (
+                      <span className="font-sans text-xs text-red-600">
+                        Unread
+                      </span>
+                    )}
                   </div>
                 </div>
               </CardContent>
@@ -219,10 +250,7 @@ export const VendorDashboardScreen: React.FC = () => {
                       </span>
                     </div>
                     <span className="font-heading font-bold text-neutral-900 text-lg md:text-3xl">
-                      89
-                    </span>
-                    <span className="font-sans text-xs text-neutral-600">
-                      +3 this week
+                      {metrics.totalProducts}
                     </span>
                   </div>
                 </div>
@@ -238,7 +266,10 @@ export const VendorDashboardScreen: React.FC = () => {
                     <h2 className="font-heading font-bold text-neutral-900 text-base md:text-xl">
                       Recent Orders
                     </h2>
-                    <button className="flex items-center gap-1 md:gap-2 text-xs md:text-sm text-neutral-600 hover:text-neutral-900">
+                    <button
+                      onClick={() => navigate('/vendor/orders')}
+                      className="flex items-center gap-1 md:gap-2 text-xs md:text-sm text-neutral-600 hover:text-neutral-900"
+                    >
                       <span className="hidden sm:inline">View All</span>
                       <ExternalLink className="w-3 h-3 md:w-4 md:h-4" />
                     </button>
@@ -249,10 +280,7 @@ export const VendorDashboardScreen: React.FC = () => {
                       <thead className="border-b border-neutral-200">
                         <tr>
                           <th className="text-left pb-2 md:pb-3 pl-4 md:pl-0 font-sans text-xs md:text-sm font-semibold text-neutral-700">
-                            ID
-                          </th>
-                          <th className="text-left pb-2 md:pb-3 font-sans text-xs md:text-sm font-semibold text-neutral-700">
-                            Item
+                            Order #
                           </th>
                           <th className="text-left pb-2 md:pb-3 font-sans text-xs md:text-sm font-semibold text-neutral-700">
                             Amount
@@ -266,35 +294,40 @@ export const VendorDashboardScreen: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody>
-                        {orders.map((order) => (
-                          <tr
-                            key={order.id}
-                            className="border-b border-neutral-100 last:border-b-0"
-                          >
-                            <td className="py-3 md:py-4 pl-4 md:pl-0 font-sans text-xs md:text-sm text-neutral-900">
-                              {order.id}
-                            </td>
-                            <td className="py-3 md:py-4 font-sans text-xs md:text-sm text-neutral-900">
-                              {order.item}
-                            </td>
-                            <td className="py-3 md:py-4 font-sans text-xs md:text-sm text-neutral-900">
-                              {order.amount}
-                            </td>
-                            <td className="py-3 md:py-4">
-                              <span
-                                className={`px-2 py-0.5 md:px-3 md:py-1 rounded-md text-xs font-medium ${getStatusColor(
-                                  order.status
-                                )}`}
-                              >
-                                {order.status.charAt(0).toUpperCase() +
-                                  order.status.slice(1)}
-                              </span>
-                            </td>
-                            <td className="py-3 md:py-4 pr-4 md:pr-0 font-sans text-xs md:text-sm text-neutral-600">
-                              {order.date}
+                        {recentOrders.length === 0 ? (
+                          <tr>
+                            <td colSpan={4} className="py-8 text-center text-neutral-500 text-sm">
+                              No orders yet
                             </td>
                           </tr>
-                        ))}
+                        ) : (
+                          recentOrders.map((order) => (
+                            <tr
+                              key={order.id}
+                              className="border-b border-neutral-100 last:border-b-0"
+                            >
+                              <td className="py-3 md:py-4 pl-4 md:pl-0 font-sans text-xs md:text-sm text-neutral-900">
+                                {order.order_number}
+                              </td>
+                              <td className="py-3 md:py-4 font-sans text-xs md:text-sm text-neutral-900">
+                                ₦{order.total_amount.toLocaleString()}
+                              </td>
+                              <td className="py-3 md:py-4">
+                                <span
+                                  className={`px-2 py-0.5 md:px-3 md:py-1 rounded-md text-xs font-medium ${getStatusColor(
+                                    order.status
+                                  )}`}
+                                >
+                                  {order.status.charAt(0).toUpperCase() +
+                                    order.status.slice(1)}
+                                </span>
+                              </td>
+                              <td className="py-3 md:py-4 pr-4 md:pr-0 font-sans text-xs md:text-sm text-neutral-600">
+                                {new Date(order.created_at).toLocaleDateString()}
+                              </td>
+                            </tr>
+                          ))
+                        )}
                       </tbody>
                     </table>
                   </div>
@@ -314,21 +347,25 @@ export const VendorDashboardScreen: React.FC = () => {
 
                   <div className="mb-4 md:mb-6">
                     <div className="text-green-700 font-heading font-bold text-2xl md:text-4xl mb-1 md:mb-2">
-                      3 Unread
+                      {metrics.unreadMessages} Unread
                     </div>
                   </div>
 
                   <div className="flex flex-col gap-2 md:gap-3 mb-4 md:mb-6">
-                    {messages.map((message) => (
-                      <div
-                        key={message.id}
-                        className="p-2 md:p-3 bg-neutral-50 rounded-lg border border-neutral-100"
-                      >
-                        <p className="font-sans text-xs md:text-sm text-neutral-700">
-                          {message.text}
-                        </p>
-                      </div>
-                    ))}
+                    {unreadMessagesList.length === 0 ? (
+                      <p className="text-sm text-neutral-500">No new messages</p>
+                    ) : (
+                      unreadMessagesList.map((message) => (
+                        <div
+                          key={message.id}
+                          className="p-2 md:p-3 bg-neutral-50 rounded-lg border border-neutral-100"
+                        >
+                          <p className="font-sans text-xs md:text-sm text-neutral-700 truncate">
+                            {message.last_message || 'New message'}
+                          </p>
+                        </div>
+                      ))
+                    )}
                   </div>
 
                   <Button
@@ -352,47 +389,6 @@ export const VendorDashboardScreen: React.FC = () => {
                 <CardContent className="p-4 md:p-6">
                   <div className="mb-3 md:mb-4">
                     <h3 className="font-heading font-bold text-neutral-900 text-sm md:text-lg">
-                      Monthly Sales Trend
-                    </h3>
-                    <p className="font-sans text-xs md:text-sm text-neutral-600">
-                      Last 8 months
-                    </p>
-                  </div>
-
-                  <div className="h-48 md:h-64 flex items-end gap-2 md:gap-4 mt-4 md:mt-6">
-                    {salesData.map((data, index) => {
-                      const height = (data.value / maxSales) * 100;
-                      return (
-                        <div key={index} className="flex-1 flex flex-col items-center gap-1 md:gap-2">
-                          <div className="h-32 md:h-48 w-full flex items-end">
-                            <div
-                              className="w-full bg-green-700 rounded-t-md relative group cursor-pointer hover:bg-green-800 transition-colors"
-                              style={{ height: `${height}%` }}
-                            >
-                              <div className="absolute -top-6 md:-top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-neutral-900 text-white text-xs px-1 md:px-2 py-0.5 md:py-1 rounded whitespace-nowrap">
-                                ₦{(data.value / 1000).toFixed(1)}k
-                              </div>
-                            </div>
-                          </div>
-                          <span className="font-sans text-xs text-neutral-600">
-                            {data.month}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  <div className="flex items-center justify-center gap-2 mt-4">
-                    <div className="w-3 h-3 bg-green-700 rounded-sm"></div>
-                    <span className="font-sans text-xs text-neutral-600">Sales</span>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="border border-neutral-200 shadow-sm">
-                <CardContent className="p-4 md:p-6">
-                  <div className="mb-3 md:mb-4">
-                    <h3 className="font-heading font-bold text-neutral-900 text-sm md:text-lg">
                       Order Status Distribution
                     </h3>
                     <p className="font-sans text-xs md:text-sm text-neutral-600">
@@ -400,103 +396,120 @@ export const VendorDashboardScreen: React.FC = () => {
                     </p>
                   </div>
 
-                  <div className="flex items-center justify-center my-4 md:my-8">
-                    <div className="relative w-36 h-36 md:w-48 md:h-48">
-                      <svg viewBox="0 0 100 100" className="transform -rotate-90">
-                        {orderStatusData.reduce((acc, item, index) => {
-                          const prevPercentage = orderStatusData
-                            .slice(0, index)
-                            .reduce((sum, i) => sum + i.percentage, 0);
-                          const startAngle = (prevPercentage / 100) * 360;
-                          const endAngle = ((prevPercentage + item.percentage) / 100) * 360;
+                  {totalOrdersForChart > 0 ? (
+                    <>
+                      <div className="flex items-center justify-center my-4 md:my-8">
+                        <div className="relative w-36 h-36 md:w-48 md:h-48">
+                          <svg viewBox="0 0 100 100" className="transform -rotate-90">
+                            {orderStatusData.reduce((acc, item, index) => {
+                              const percentage = (item.count / totalOrdersForChart) * 100;
+                              const prevPercentage = orderStatusData
+                                .slice(0, index)
+                                .reduce((sum, i) => sum + (i.count / totalOrdersForChart) * 100, 0);
 
-                          const startRad = (startAngle * Math.PI) / 180;
-                          const endRad = (endAngle * Math.PI) / 180;
+                              const startAngle = (prevPercentage / 100) * 360;
+                              const endAngle = ((prevPercentage + percentage) / 100) * 360;
 
-                          const x1 = 50 + 40 * Math.cos(startRad);
-                          const y1 = 50 + 40 * Math.sin(startRad);
-                          const x2 = 50 + 40 * Math.cos(endRad);
-                          const y2 = 50 + 40 * Math.sin(endRad);
+                              const startRad = (startAngle * Math.PI) / 180;
+                              const endRad = (endAngle * Math.PI) / 180;
 
-                          const largeArc = item.percentage > 50 ? 1 : 0;
+                              const x1 = 50 + 40 * Math.cos(startRad);
+                              const y1 = 50 + 40 * Math.sin(startRad);
+                              const x2 = 50 + 40 * Math.cos(endRad);
+                              const y2 = 50 + 40 * Math.sin(endRad);
 
-                          const pathData = [
-                            `M 50 50`,
-                            `L ${x1} ${y1}`,
-                            `A 40 40 0 ${largeArc} 1 ${x2} ${y2}`,
-                            `Z`
-                          ].join(' ');
+                              const largeArc = percentage > 50 ? 1 : 0;
 
-                          let fillColor = '';
-                          if (item.color === 'bg-yellow-500') fillColor = '#eab308';
-                          else if (item.color === 'bg-red-400') fillColor = '#f87171';
-                          else if (item.color === 'bg-green-600') fillColor = '#16a34a';
-                          else if (item.color === 'bg-green-800') fillColor = '#166534';
-                          else if (item.color === 'bg-purple-600') fillColor = '#9333ea';
+                              // If only one item, draw full circle
+                              const pathData = orderStatusData.length === 1
+                                ? `M 50 10 a 40 40 0 1 0 0 80 a 40 40 0 1 0 0 -80`
+                                : `M 50 50 L ${x1} ${y1} A 40 40 0 ${largeArc} 1 ${x2} ${y2} Z`;
 
-                          acc.push(
-                            <path
-                              key={index}
-                              d={pathData}
-                              fill={fillColor}
-                              className="hover:opacity-80 transition-opacity"
-                            />
-                          );
-                          return acc;
-                        }, [] as JSX.Element[])}
-                        <circle cx="50" cy="50" r="20" fill="white" />
-                      </svg>
+                              let fillColor = '';
+                              if (item.color === 'bg-yellow-500') fillColor = '#eab308';
+                              else if (item.color === 'bg-blue-400') fillColor = '#60a5fa';
+                              else if (item.color === 'bg-indigo-500') fillColor = '#6366f1';
+                              else if (item.color === 'bg-green-600') fillColor = '#16a34a';
+                              else if (item.color === 'bg-red-500') fillColor = '#ef4444';
+                              else fillColor = '#9ca3af';
+
+                              acc.push(
+                                <path
+                                  key={index}
+                                  d={pathData}
+                                  fill={fillColor}
+                                  className="hover:opacity-80 transition-opacity"
+                                />
+                              );
+                              return acc;
+                            }, [] as JSX.Element[])}
+                            <circle cx="50" cy="50" r="20" fill="white" />
+                          </svg>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        {orderStatusData.map((item, index) => (
+                          <div key={index} className="flex items-center gap-2">
+                            <div className={`w-3 h-3 rounded-sm ${item.color}`}></div>
+                            <span className="font-sans text-xs text-neutral-700">
+                              {item.status} ({item.count})
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="h-48 flex items-center justify-center text-neutral-500 text-sm">
+                      No order data available
                     </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="border border-neutral-200 shadow-sm">
+                <CardContent className="p-6">
+                  <div className="mb-6">
+                    <h3 className="font-heading font-bold text-neutral-900 text-lg">
+                      Most Viewed Products
+                    </h3>
+                    <p className="font-sans text-sm text-neutral-600">
+                      Your top products by view count
+                    </p>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    {orderStatusData.map((item, index) => (
-                      <div key={index} className="flex items-center gap-2">
-                        <div className={`w-3 h-3 rounded-sm ${item.color}`}></div>
-                        <span className="font-sans text-xs text-neutral-700">
-                          {item.status}
-                        </span>
-                      </div>
-                    ))}
+                  <div className="flex flex-col gap-4">
+                    {topProducts.length === 0 ? (
+                      <p className="text-sm text-neutral-500">No products found</p>
+                    ) : (
+                      topProducts.map((product, index) => {
+                        const maxViews = Math.max(...topProducts.map((p) => p.views_count || 0));
+                        const percentage = maxViews > 0 ? ((product.views_count || 0) / maxViews) * 100 : 0;
+                        const colors = ['bg-green-700', 'bg-yellow-500', 'bg-red-400', 'bg-blue-500', 'bg-purple-500'];
+
+                        return (
+                          <div key={index} className="flex items-center gap-4">
+                            <div className="w-40 font-sans text-sm text-neutral-900 truncate">
+                              {product.title}
+                            </div>
+                            <div className="flex-1 h-10 bg-neutral-100 rounded-lg overflow-hidden relative">
+                              <div
+                                className={`h-full ${colors[index % colors.length]} transition-all duration-500`}
+                                style={{ width: `${percentage}%` }}
+                              ></div>
+                              <span className="absolute inset-0 flex items-center justify-end px-2 text-xs font-medium text-neutral-600">
+                                {product.views_count || 0} views
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
                 </CardContent>
               </Card>
             </div>
           </div>
-
-          <Card className="border border-neutral-200 shadow-sm">
-            <CardContent className="p-6">
-              <div className="mb-6">
-                <h3 className="font-heading font-bold text-neutral-900 text-lg">
-                  Top Selling Products
-                </h3>
-                <p className="font-sans text-sm text-neutral-600">
-                  Your best performing products by sales volume
-                </p>
-              </div>
-
-              <div className="flex flex-col gap-4">
-                {topProducts.map((product, index) => {
-                  const maxProduct = Math.max(...topProducts.map((p) => p.sales));
-                  const percentage = (product.sales / maxProduct) * 100;
-
-                  return (
-                    <div key={index} className="flex items-center gap-4">
-                      <div className="w-40 font-sans text-sm text-neutral-900">
-                        {product.name}
-                      </div>
-                      <div className="flex-1 h-10 bg-neutral-100 rounded-lg overflow-hidden">
-                        <div
-                          className={`h-full ${product.color} transition-all duration-500`}
-                          style={{ width: `${percentage}%` }}
-                        ></div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
         </div>
       </div>
     </div>
