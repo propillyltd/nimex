@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
 import { Star, Upload, X } from 'lucide-react';
 import { Button } from '../ui/button';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
+import { FirebaseStorageService } from '../../services/firebaseStorage.service';
+import { COLLECTIONS } from '../../lib/collections';
 import { logger } from '../../lib/logger';
+import { Timestamp } from 'firebase/firestore';
 
 interface ReviewFormProps {
   orderId: string;
@@ -49,20 +52,13 @@ export const ReviewForm: React.FC<ReviewFormProps> = ({
         const fileName = `${buyerId}_${Date.now()}_${Math.random()}.${fileExt}`;
         const filePath = `review-images/${fileName}`;
 
-        const { error: uploadError } = await supabase.storage
-          .from('reviews')
-          .upload(filePath, file);
-
-        if (uploadError) {
+        try {
+          const downloadUrl = await FirebaseStorageService.uploadFile(file, filePath);
+          uploadedUrls.push(downloadUrl);
+        } catch (uploadError) {
           logger.error('Error uploading image', uploadError);
           continue;
         }
-
-        const { data } = supabase.storage
-          .from('reviews')
-          .getPublicUrl(filePath);
-
-        uploadedUrls.push(data.publicUrl);
       }
 
       setImages(prev => [...prev, ...uploadedUrls]);
@@ -90,24 +86,18 @@ export const ReviewForm: React.FC<ReviewFormProps> = ({
 
     setSubmitting(true);
     try {
-      const { error } = await (supabase
-        .from('reviews') as any)
-        .insert({
-          product_id: productId,
-          order_id: orderId,
-          buyer_id: buyerId,
-          vendor_id: vendorId,
-          rating,
-          review_text: reviewText.trim(),
-          images: images,
-          is_verified_purchase: true
-        });
-
-      if (error) {
-        logger.error('Error submitting review', error);
-        alert('Failed to submit review. Please try again.');
-        return;
-      }
+      const reviewId = `review_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      await FirestoreService.setDocument(COLLECTIONS.REVIEWS, reviewId, {
+        product_id: productId,
+        order_id: orderId,
+        buyer_id: buyerId,
+        vendor_id: vendorId,
+        rating,
+        review_text: reviewText.trim(),
+        images: images,
+        is_verified_purchase: true,
+        created_at: Timestamp.now()
+      });
 
       logger.info('Review submitted successfully');
       onReviewSubmitted();
@@ -141,11 +131,10 @@ export const ReviewForm: React.FC<ReviewFormProps> = ({
               className="p-1"
             >
               <Star
-                className={`w-6 h-6 ${
-                  star <= (hoverRating || rating)
+                className={`w-6 h-6 ${star <= (hoverRating || rating)
                     ? 'text-yellow-400 fill-current'
                     : 'text-neutral-300'
-                }`}
+                  }`}
               />
             </button>
           ))}
@@ -182,7 +171,7 @@ export const ReviewForm: React.FC<ReviewFormProps> = ({
           {images.map((image, index) => (
             <div key={index} className="relative">
               <img
-                src={typeof image === 'string' ? image : image.url}
+                src={image}
                 alt={`Review ${index + 1}`}
                 className="w-16 h-16 object-cover rounded-lg border border-neutral-200"
               />

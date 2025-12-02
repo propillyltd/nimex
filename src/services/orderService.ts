@@ -1,5 +1,8 @@
-import { supabase } from '../lib/supabase';
+import { FirestoreService } from './firestore.service';
+import { COLLECTIONS } from '../lib/collections';
 import { logger } from '../lib/logger';
+import { Timestamp } from 'firebase/firestore';
+import type { Order, OrderItem, Vendor } from '../types/firestore';
 
 interface CreateOrderRequest {
   buyerId: string;
@@ -48,51 +51,49 @@ class OrderService {
       const totalAmount = subtotal + request.deliveryCost;
       const orderNumber = `NIMEX-${Date.now()}-${Math.random().toString(36).substring(7).toUpperCase()}`;
 
-      const { data: order, error: orderError } = await supabase
-        .from('orders')
-        .insert({
+      // Generate IDs
+      const orderId = `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // Use transaction to create order and items
+      await FirestoreService.runTransaction(async (transaction) => {
+        // Create order
+        await FirestoreService.setDocument(COLLECTIONS.ORDERS, orderId, {
           order_number: orderNumber,
           buyer_id: request.buyerId,
           vendor_id: request.vendorId,
-          delivery_address_id: request.deliveryAddressId,
+          delivery_address_id: request.deliveryAddressId, // Note: This field needs to be in Order type if we use it
           status: 'pending',
           subtotal,
           shipping_fee: request.deliveryCost,
           total_amount: totalAmount,
           payment_status: 'pending',
-          notes: request.notes,
-        })
-        .select()
-        .single();
+          notes: request.notes || null,
+          created_at: Timestamp.now(),
+          updated_at: Timestamp.now(),
+        });
 
-      if (orderError || !order) {
-        throw new Error(orderError?.message || 'Failed to create order');
-      }
-
-      const orderItems = request.items.map((item) => ({
-        order_id: order.id,
-        product_id: item.productId,
-        product_title: item.productTitle,
-        product_image: item.productImage,
-        quantity: item.quantity,
-        unit_price: item.unitPrice,
-        total_price: item.unitPrice * item.quantity,
-      }));
-
-      const { error: itemsError } = await supabase
-        .from('order_items')
-        .insert(orderItems);
-
-      if (itemsError) {
-        await supabase.from('orders').delete().eq('id', order.id);
-        throw new Error(itemsError.message);
-      }
+        // Create order items
+        for (const item of request.items) {
+          const itemId = `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          await FirestoreService.setDocument(COLLECTIONS.ORDER_ITEMS, itemId, {
+            order_id: orderId,
+            product_id: item.productId,
+            product_title: item.productTitle,
+            product_image: item.productImage,
+            quantity: item.quantity,
+            unit_price: item.unitPrice,
+            total_price: item.unitPrice * item.quantity,
+            created_at: Timestamp.now(),
+            updated_at: Timestamp.now(),
+          });
+        }
+      });
 
       return {
         success: true,
         data: {
-          orderId: order.id,
-          orderNumber: order.order_number,
+          orderId,
+          orderNumber,
         },
       };
     } catch (error) {
@@ -111,19 +112,12 @@ class OrderService {
     paymentMethod: string
   ): Promise<{ success: boolean; error?: string }> {
     try {
-      const { error } = await supabase
-        .from('orders')
-        .update({
-          payment_status: paymentStatus,
-          payment_reference: paymentReference,
-          payment_method: paymentMethod,
-          status: paymentStatus === 'paid' ? 'confirmed' : 'cancelled',
-        })
-        .eq('id', orderId);
-
-      if (error) {
-        throw new Error(error.message);
-      }
+      await FirestoreService.updateDocument(COLLECTIONS.ORDERS, orderId, {
+        payment_status: paymentStatus,
+        payment_reference: paymentReference,
+        payment_method: paymentMethod,
+        status: paymentStatus === 'paid' ? 'confirmed' : 'cancelled',
+      });
 
       return { success: true };
     } catch (error) {
@@ -137,34 +131,38 @@ class OrderService {
 
   async confirmDelivery(request: ConfirmDeliveryRequest): Promise<{ success: boolean; error?: string }> {
     try {
-      const { data: delivery, error: deliveryError } = await supabase
-        .from('deliveries')
-        .update({
-          delivery_status: 'delivered',
-          actual_delivery_date: new Date().toISOString(),
-        })
-        .eq('order_id', request.orderId)
-        .eq('buyer_id', request.buyerId)
-        .select()
-        .single();
+      // Find delivery record
+      const deliveries = await FirestoreService.getDocuments(COLLECTIONS.DELIVERIES, {
+        filters: [
+          { field: 'order_id', operator: '==', value: request.orderId },
+          { field: 'buyer_id', operator: '==', value: request.buyerId }
+        ],
+        limitCount: 1
+      });
 
-      if (deliveryError) {
-        throw new Error(deliveryError.message);
+      if (deliveries.length === 0) {
+        throw new Error('Delivery record not found');
       }
 
-      const { error: releaseError } = await supabase
-        .from('escrow_releases')
-        .insert({
-          escrow_transaction_id: delivery.id,
-          release_type: 'manual_buyer',
-          buyer_confirmed_delivery: true,
-          delivery_confirmed_at: new Date().toISOString(),
-          release_requested_by: request.buyerId,
+      const delivery = deliveries[0];
+
+      await FirestoreService.runTransaction(async (transaction) => {
+        // Update delivery status
+        await FirestoreService.updateDocument(COLLECTIONS.DELIVERIES, delivery.id, {
+          delivery_status: 'delivered',
+          actual_delivery_date: Timestamp.now(),
         });
 
-      if (releaseError) {
-        throw new Error(releaseError.message);
-      }
+        // Create escrow release record
+        const releaseId = `release_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        await FirestoreService.setDocument('escrow_releases', releaseId, {
+          escrow_transaction_id: delivery.id, // Assuming delivery ID is linked to escrow? Or should check escrow_transactions table logic
+          release_type: 'manual_buyer',
+          buyer_confirmed_delivery: true,
+          delivery_confirmed_at: Timestamp.now(),
+          release_requested_by: request.buyerId,
+        });
+      });
 
       return { success: true };
     } catch (error) {
@@ -178,57 +176,44 @@ class OrderService {
 
   async releaseEscrow(request: ReleaseEscrowRequest): Promise<{ success: boolean; error?: string }> {
     try {
-      const { data: escrowTransaction, error: escrowError } = await supabase
-        .from('escrow_transactions')
-        .select('*')
-        .eq('order_id', request.orderId)
-        .single();
+      // Get escrow transaction
+      const escrowTransactions = await FirestoreService.getDocuments(COLLECTIONS.ESCROW_TRANSACTIONS, {
+        filters: [{ field: 'order_id', operator: '==', value: request.orderId }],
+        limitCount: 1
+      });
 
-      if (escrowError || !escrowTransaction) {
+      if (escrowTransactions.length === 0) {
         throw new Error('Escrow transaction not found');
       }
+
+      const escrowTransaction: any = escrowTransactions[0];
 
       if (escrowTransaction.status !== 'held') {
         throw new Error('Escrow already released or refunded');
       }
 
-      const { error: updateError } = await supabase
-        .from('escrow_transactions')
-        .update({
+      await FirestoreService.runTransaction(async (transaction) => {
+        // 1. Update escrow transaction
+        await FirestoreService.updateDocument(COLLECTIONS.ESCROW_TRANSACTIONS, escrowTransaction.id, {
           status: 'released',
-          released_at: new Date().toISOString(),
+          released_at: Timestamp.now(),
           release_reason: request.notes || 'Delivery confirmed',
-        })
-        .eq('id', escrowTransaction.id);
+        });
 
-      if (updateError) {
-        throw new Error(updateError.message);
-      }
+        // 2. Get vendor
+        const vendor = await FirestoreService.getDocument<Vendor>(COLLECTIONS.VENDORS, escrowTransaction.vendor_id);
+        if (!vendor) throw new Error('Vendor not found');
 
-      const { data: vendor, error: vendorError } = await supabase
-        .from('vendors')
-        .select('wallet_balance')
-        .eq('id', escrowTransaction.vendor_id)
-        .single();
+        const newBalance = (vendor.wallet_balance || 0) + escrowTransaction.vendor_amount;
 
-      if (vendorError || !vendor) {
-        throw new Error('Vendor not found');
-      }
+        // 3. Update vendor wallet
+        await FirestoreService.updateDocument(COLLECTIONS.VENDORS, vendor.id, {
+          wallet_balance: newBalance
+        });
 
-      const newBalance = vendor.wallet_balance + escrowTransaction.vendor_amount;
-
-      const { error: walletError } = await supabase
-        .from('vendors')
-        .update({ wallet_balance: newBalance })
-        .eq('id', escrowTransaction.vendor_id);
-
-      if (walletError) {
-        throw new Error(walletError.message);
-      }
-
-      const { error: transactionError } = await supabase
-        .from('wallet_transactions')
-        .insert({
+        // 4. Create wallet transaction
+        const txId = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        await FirestoreService.setDocument(COLLECTIONS.WALLET_TRANSACTIONS, txId, {
           vendor_id: escrowTransaction.vendor_id,
           type: 'sale',
           amount: escrowTransaction.vendor_amount,
@@ -236,11 +221,9 @@ class OrderService {
           reference: `ESCROW-${escrowTransaction.id}`,
           description: `Sale payment for order ${request.orderId}`,
           status: 'completed',
+          created_at: Timestamp.now(),
         });
-
-      if (transactionError) {
-        throw new Error(transactionError.message);
-      }
+      });
 
       return { success: true };
     } catch (error) {
@@ -254,44 +237,35 @@ class OrderService {
 
   async refundEscrow(orderId: string, reason: string): Promise<{ success: boolean; error?: string }> {
     try {
-      const { data: escrowTransaction, error: escrowError } = await supabase
-        .from('escrow_transactions')
-        .select('*')
-        .eq('order_id', orderId)
-        .single();
+      const escrowTransactions = await FirestoreService.getDocuments(COLLECTIONS.ESCROW_TRANSACTIONS, {
+        filters: [{ field: 'order_id', operator: '==', value: orderId }],
+        limitCount: 1
+      });
 
-      if (escrowError || !escrowTransaction) {
+      if (escrowTransactions.length === 0) {
         throw new Error('Escrow transaction not found');
       }
 
-      if (escrowTransaction.status !== 'held') {
+      const escrowTransaction = escrowTransactions[0];
+
+      if ((escrowTransaction as any).status !== 'held') {
         throw new Error('Escrow already released or refunded');
       }
 
-      const { error: updateError } = await supabase
-        .from('escrow_transactions')
-        .update({
+      await FirestoreService.runTransaction(async (transaction) => {
+        // Update escrow
+        await FirestoreService.updateDocument(COLLECTIONS.ESCROW_TRANSACTIONS, escrowTransaction.id, {
           status: 'refunded',
-          released_at: new Date().toISOString(),
+          released_at: Timestamp.now(),
           release_reason: reason,
-        })
-        .eq('id', escrowTransaction.id);
+        });
 
-      if (updateError) {
-        throw new Error(updateError.message);
-      }
-
-      const { error: orderError } = await supabase
-        .from('orders')
-        .update({
+        // Update order
+        await FirestoreService.updateDocument(COLLECTIONS.ORDERS, orderId, {
           status: 'cancelled',
           payment_status: 'refunded',
-        })
-        .eq('id', orderId);
-
-      if (orderError) {
-        throw new Error(orderError.message);
-      }
+        });
+      });
 
       return { success: true };
     } catch (error) {
@@ -312,25 +286,21 @@ class OrderService {
     evidenceUrls: string[]
   ): Promise<{ success: boolean; error?: string }> {
     try {
-      const { data: order, error: orderError } = await supabase
-        .from('orders')
-        .select('*')
-        .eq('id', orderId)
-        .single();
-
-      if (orderError || !order) {
+      const order = await FirestoreService.getDocument(COLLECTIONS.ORDERS, orderId);
+      if (!order) {
         throw new Error('Order not found');
       }
 
-      const { data: escrowTransaction } = await supabase
-        .from('escrow_transactions')
-        .select('id')
-        .eq('order_id', orderId)
-        .single();
+      const escrowTransactions = await FirestoreService.getDocuments(COLLECTIONS.ESCROW_TRANSACTIONS, {
+        filters: [{ field: 'order_id', operator: '==', value: orderId }],
+        limitCount: 1
+      });
+      const escrowTransaction = escrowTransactions.length > 0 ? escrowTransactions[0] : null;
 
-      const { error: disputeError } = await supabase
-        .from('disputes')
-        .insert({
+      await FirestoreService.runTransaction(async (transaction) => {
+        // Create dispute
+        const disputeId = `dispute_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        await FirestoreService.setDocument(COLLECTIONS.DISPUTES, disputeId, {
           order_id: orderId,
           escrow_transaction_id: escrowTransaction?.id,
           filed_by: filedBy,
@@ -339,29 +309,21 @@ class OrderService {
           description,
           evidence_urls: evidenceUrls,
           status: 'open',
+          created_at: Timestamp.now(),
         });
 
-      if (disputeError) {
-        throw new Error(disputeError.message);
-      }
+        // Update escrow status
+        if (escrowTransaction) {
+          await FirestoreService.updateDocument(COLLECTIONS.ESCROW_TRANSACTIONS, escrowTransaction.id, {
+            status: 'disputed'
+          });
+        }
 
-      const { error: escrowUpdateError } = await supabase
-        .from('escrow_transactions')
-        .update({ status: 'disputed' })
-        .eq('order_id', orderId);
-
-      if (escrowUpdateError) {
-        throw new Error(escrowUpdateError.message);
-      }
-
-      const { error: orderUpdateError } = await supabase
-        .from('orders')
-        .update({ status: 'disputed' })
-        .eq('id', orderId);
-
-      if (orderUpdateError) {
-        throw new Error(orderUpdateError.message);
-      }
+        // Update order status
+        await FirestoreService.updateDocument(COLLECTIONS.ORDERS, orderId, {
+          status: 'disputed'
+        });
+      });
 
       return { success: true };
     } catch (error) {

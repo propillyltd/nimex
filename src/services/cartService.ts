@@ -1,10 +1,12 @@
-import { supabase } from '../lib/supabase';
-import { Database } from '../types/database';
-import { z } from 'zod';
+import { FirestoreService } from './firestore.service';
+import { FirebaseAuthService } from './firebaseAuth.service';
+import { COLLECTIONS } from '../lib/collections';
 import { logger } from '../lib/logger';
+import { z } from 'zod';
+import type { Cart, CartItem, CartItemWithProduct, CartWithItems, Product } from '../types/firestore';
 
 // Validation schemas
-const UUIDSchema = z.string().uuid('Invalid ID format');
+const IDSchema = z.string().min(1, 'Invalid ID');
 const QuantitySchema = z.number().int('Quantity must be a whole number').min(1, 'Quantity must be at least 1').max(999, 'Quantity cannot exceed 999');
 
 // Custom error classes
@@ -29,32 +31,52 @@ export class AuthenticationError extends CartError {
     }
 }
 
-export type CartItem = Database['public']['Tables']['cart_items']['Row'] & {
-    product?: Database['public']['Tables']['products']['Row'];
-};
-
-export type Cart = Database['public']['Tables']['carts']['Row'] & {
-    items: CartItem[];
-};
-
 export const CartService = {
-    async getCart(): Promise<Cart | null> {
+    async getCart(): Promise<CartWithItems | null> {
         try {
-            const { data: { user } } = await supabase.auth.getUser();
+            const user = FirebaseAuthService.getCurrentUser();
             if (!user) return null;
 
-            const { data: cart, error } = await supabase
-                .from('carts')
-                .select('*, items:cart_items(*, product:products(*))')
-                .eq('user_id', user.id)
-                .single();
+            // 1. Get cart
+            const carts = await FirestoreService.getDocuments<Cart>(COLLECTIONS.CARTS, {
+                filters: [{ field: 'user_id', operator: '==', value: user.uid }],
+                limitCount: 1
+            });
 
-            if (error && error.code !== 'PGRST116') { // PGRST116 is "no rows returned"
-                logger.error('Error fetching cart:', error);
-                throw new CartError('Unable to load your cart. Please try again.', 'FETCH_ERROR');
+            if (carts.length === 0) {
+                return null;
             }
 
-            return cart as Cart;
+            const cart = carts[0];
+
+            // 2. Get cart items
+            const items = await FirestoreService.getDocuments<CartItem>(COLLECTIONS.CART_ITEMS, {
+                filters: [{ field: 'cart_id', operator: '==', value: cart.id }]
+            });
+
+            // 3. Fetch product details for each item
+            // This is an N+1 query, but for a cart (usually small number of items), it's acceptable.
+            // Optimization: We could store product snapshot in cart item, but we want fresh prices.
+            const itemsWithProducts: CartItemWithProduct[] = await Promise.all(
+                items.map(async (item) => {
+                    try {
+                        const product = await FirestoreService.getDocument<Product>(COLLECTIONS.PRODUCTS, item.product_id);
+                        return {
+                            ...item,
+                            product: product || undefined
+                        };
+                    } catch (error) {
+                        logger.warn(`Failed to fetch product for cart item ${item.id}`, error);
+                        return item;
+                    }
+                })
+            );
+
+            return {
+                ...cart,
+                items: itemsWithProducts
+            };
+
         } catch (error) {
             if (error instanceof CartError) throw error;
             logger.error('Unexpected error in getCart:', error);
@@ -65,73 +87,63 @@ export const CartService = {
     async addToCart(productId: string, quantity: number = 1): Promise<void> {
         try {
             // Validate inputs
-            UUIDSchema.parse(productId);
+            IDSchema.parse(productId);
             QuantitySchema.parse(quantity);
 
-            const { data: { user } } = await supabase.auth.getUser();
+            const user = FirebaseAuthService.getCurrentUser();
             if (!user) throw new AuthenticationError();
 
             // 1. Get or create cart
-            let { data: cart } = await supabase
-                .from('carts')
-                .select('id')
-                .eq('user_id', user.id)
-                .single();
+            let cartId: string;
 
-            if (!cart) {
-                const { data: newCart, error: createError } = await supabase
-                    .from('carts')
-                    .insert({ user_id: user.id })
-                    .select('id')
-                    .single();
+            const carts = await FirestoreService.getDocuments<Cart>(COLLECTIONS.CARTS, {
+                filters: [{ field: 'user_id', operator: '==', value: user.uid }],
+                limitCount: 1
+            });
 
-                if (createError) {
-                    logger.error('Error creating cart:', createError);
-                    throw new CartError('Unable to create cart. Please try again.', 'CREATE_ERROR');
-                }
-                cart = newCart;
+            if (carts.length > 0) {
+                cartId = carts[0].id;
+            } else {
+                // Create new cart
+                // We can use user.uid as cart ID for 1:1 mapping, but let's stick to auto-ID for flexibility
+                // Actually, let's use a generated ID to avoid potential issues if we ever want multiple carts
+                const newCartRef = await FirestoreService.setDocument(COLLECTIONS.CARTS, `cart_${user.uid}`, {
+                    user_id: user.uid
+                });
+                cartId = `cart_${user.uid}`;
             }
 
-            if (!cart) throw new CartError('Failed to create cart', 'CREATE_ERROR');
-
             // 2. Check if item exists
-            const { data: existingItem } = await supabase
-                .from('cart_items')
-                .select('id, quantity')
-                .eq('cart_id', cart.id)
-                .eq('product_id', productId)
-                .single();
+            const existingItems = await FirestoreService.getDocuments<CartItem>(COLLECTIONS.CART_ITEMS, {
+                filters: [
+                    { field: 'cart_id', operator: '==', value: cartId },
+                    { field: 'product_id', operator: '==', value: productId }
+                ],
+                limitCount: 1
+            });
 
-            if (existingItem) {
+            if (existingItems.length > 0) {
                 // Update quantity
+                const existingItem = existingItems[0];
                 const newQuantity = existingItem.quantity + quantity;
+
                 if (newQuantity > 999) {
                     throw new ValidationError('Cannot add more than 999 items');
                 }
 
-                const { error } = await supabase
-                    .from('cart_items')
-                    .update({ quantity: newQuantity })
-                    .eq('id', existingItem.id);
-
-                if (error) {
-                    logger.error('Error updating cart item:', error);
-                    throw new CartError('Unable to update cart. Please try again.', 'UPDATE_ERROR');
-                }
+                await FirestoreService.updateDocument(COLLECTIONS.CART_ITEMS, existingItem.id, {
+                    quantity: newQuantity
+                });
             } else {
                 // Insert new item
-                const { error } = await supabase
-                    .from('cart_items')
-                    .insert({
-                        cart_id: cart.id,
-                        product_id: productId,
-                        quantity
-                    });
+                // Generate a unique ID for the cart item
+                const itemId = `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-                if (error) {
-                    logger.error('Error adding to cart:', error);
-                    throw new CartError('Unable to add item to cart. Please try again.', 'INSERT_ERROR');
-                }
+                await FirestoreService.setDocument(COLLECTIONS.CART_ITEMS, itemId, {
+                    cart_id: cartId,
+                    product_id: productId,
+                    quantity
+                });
             }
         } catch (error) {
             if (error instanceof z.ZodError) {
@@ -146,7 +158,7 @@ export const CartService = {
     async updateQuantity(itemId: string, quantity: number): Promise<void> {
         try {
             // Validate inputs
-            UUIDSchema.parse(itemId);
+            IDSchema.parse(itemId);
 
             if (quantity <= 0) {
                 await this.removeFromCart(itemId);
@@ -155,15 +167,10 @@ export const CartService = {
 
             QuantitySchema.parse(quantity);
 
-            const { error } = await supabase
-                .from('cart_items')
-                .update({ quantity })
-                .eq('id', itemId);
+            await FirestoreService.updateDocument(COLLECTIONS.CART_ITEMS, itemId, {
+                quantity
+            });
 
-            if (error) {
-                logger.error('Error updating quantity:', error);
-                throw new CartError('Unable to update quantity. Please try again.', 'UPDATE_ERROR');
-            }
         } catch (error) {
             if (error instanceof z.ZodError) {
                 throw new ValidationError(error.errors[0].message);
@@ -176,17 +183,10 @@ export const CartService = {
 
     async removeFromCart(itemId: string): Promise<void> {
         try {
-            UUIDSchema.parse(itemId);
+            IDSchema.parse(itemId);
 
-            const { error } = await supabase
-                .from('cart_items')
-                .delete()
-                .eq('id', itemId);
+            await FirestoreService.deleteDocument(COLLECTIONS.CART_ITEMS, itemId);
 
-            if (error) {
-                logger.error('Error removing from cart:', error);
-                throw new CartError('Unable to remove item. Please try again.', 'DELETE_ERROR');
-            }
         } catch (error) {
             if (error instanceof z.ZodError) {
                 throw new ValidationError(error.errors[0].message);
@@ -199,24 +199,33 @@ export const CartService = {
 
     async clearCart(): Promise<void> {
         try {
-            const { data: { user } } = await supabase.auth.getUser();
+            const user = FirebaseAuthService.getCurrentUser();
             if (!user) return;
 
-            const { data: cart } = await supabase
-                .from('carts')
-                .select('id')
-                .eq('user_id', user.id)
-                .single();
+            const carts = await FirestoreService.getDocuments<Cart>(COLLECTIONS.CARTS, {
+                filters: [{ field: 'user_id', operator: '==', value: user.uid }],
+                limitCount: 1
+            });
 
-            if (cart) {
-                const { error } = await supabase
-                    .from('cart_items')
-                    .delete()
-                    .eq('cart_id', cart.id);
+            if (carts.length > 0) {
+                const cartId = carts[0].id;
 
-                if (error) {
-                    logger.error('Error clearing cart:', error);
-                    throw new CartError('Unable to clear cart. Please try again.', 'CLEAR_ERROR');
+                // Get all items
+                const items = await FirestoreService.getDocuments<CartItem>(COLLECTIONS.CART_ITEMS, {
+                    filters: [{ field: 'cart_id', operator: '==', value: cartId }]
+                });
+
+                // Delete all items in batch
+                if (items.length > 0) {
+                    const operations = items.map(item => ({
+                        type: 'delete' as const,
+                        collectionName: COLLECTIONS.CART_ITEMS,
+                        documentId: item.id
+                    }));
+
+                    // Batch write allows max 500 operations. If more, we need to chunk.
+                    // Assuming cart size is small for now.
+                    await FirestoreService.batchWrite(operations);
                 }
             }
         } catch (error) {

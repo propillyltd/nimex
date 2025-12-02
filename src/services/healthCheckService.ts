@@ -1,3 +1,6 @@
+import { FirestoreService } from './firestore.service';
+import { COLLECTIONS } from '../lib/collections';
+
 interface HealthCheckResult {
   service: string;
   status: 'healthy' | 'unhealthy';
@@ -85,37 +88,32 @@ class HealthCheckService {
     }
   }
 
-  async checkSupabaseHealth(): Promise<HealthCheckResult> {
+  async checkFirestoreHealth(): Promise<HealthCheckResult> {
     const startTime = Date.now();
     try {
-      // Simple health check - try to get current timestamp
-      const { data, error } = await import('../lib/supabase').then(({ supabase }) =>
-        supabase.rpc('now')
-      );
+      // Simple health check - try to fetch 1 document from profiles
+      // We use profiles because it's a core collection
+      await FirestoreService.getDocuments(COLLECTIONS.PROFILES, { limitCount: 1 });
 
       const result: HealthCheckResult = {
-        service: 'supabase',
-        status: error ? 'unhealthy' : 'healthy',
+        service: 'firestore',
+        status: 'healthy',
         timestamp: new Date().toISOString(),
         responseTime: Date.now() - startTime,
       };
 
-      if (error) {
-        result.error = error.message;
-      }
-
-      this.lastChecks.set('supabase', result);
+      this.lastChecks.set('firestore', result);
       return result;
     } catch (error) {
       const result: HealthCheckResult = {
-        service: 'supabase',
+        service: 'firestore',
         status: 'unhealthy',
         timestamp: new Date().toISOString(),
         responseTime: Date.now() - startTime,
         error: error instanceof Error ? error.message : 'Unknown error',
       };
 
-      this.lastChecks.set('supabase', result);
+      this.lastChecks.set('firestore', result);
       return result;
     }
   }
@@ -124,7 +122,7 @@ class HealthCheckService {
     const checks = await Promise.allSettled([
       this.checkTwilioHealth(),
       this.checkSendGridHealth(),
-      this.checkSupabaseHealth(),
+      this.checkFirestoreHealth(),
     ]);
 
     const results: HealthCheckResult[] = [];

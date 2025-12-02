@@ -1,6 +1,8 @@
 import { SUPPORT_CONSTANTS, SUPPORT_MESSAGES } from '../constants/support';
 import { TicketStatus, TicketPriority, TicketStats, SupportTicket } from '../types/support';
 import { logger } from './logger';
+import { FirebaseStorageService } from '../services/firebaseStorage.service';
+import { STORAGE_PATHS } from './collections';
 
 // Debounce utility for real-time updates
 export const debounce = <T extends (...args: any[]) => any>(
@@ -117,7 +119,7 @@ export const handleSupportError = (error: any, context: string): string => {
   logger.error(`${context}: ${error?.message || 'Unknown error'}`, error);
 
   // Return user-friendly error message
-  if (error?.code === 'PGRST116') {
+  if (error?.code === 'permission-denied') {
     return SUPPORT_MESSAGES.ERRORS.UNAUTHORIZED;
   }
 
@@ -158,23 +160,13 @@ export const uploadSupportAttachment = async (
   try {
     const fileExt = file.name.split('.').pop();
     const fileName = `${userId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.${fileExt}`;
-    const filePath = `support-attachments/${fileName}`;
+    // Use STORAGE_PATHS.SUPPORT_ATTACHMENTS if available, or fallback
+    const basePath = STORAGE_PATHS.SUPPORT_ATTACHMENTS || 'support/attachments';
+    const filePath = `${basePath}/${fileName}`;
 
-    const { supabase } = await import('./supabase');
-    const { error: uploadError } = await supabase.storage
-      .from('support')
-      .upload(filePath, file);
+    const url = await FirebaseStorageService.uploadFile(file, filePath);
 
-    if (uploadError) {
-      logger.error('Error uploading attachment', uploadError);
-      return { error: SUPPORT_MESSAGES.ERRORS.TICKET_CREATION_FAILED };
-    }
-
-    const { data } = supabase.storage
-      .from('support')
-      .getPublicUrl(filePath);
-
-    return { url: data.publicUrl };
+    return { url };
   } catch (error) {
     logger.error('Error uploading support attachment', error);
     return { error: SUPPORT_MESSAGES.ERRORS.TICKET_CREATION_FAILED };

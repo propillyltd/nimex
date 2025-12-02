@@ -1,5 +1,8 @@
-import { supabase } from '../lib/supabase';
+import { FirestoreService } from './firestore.service';
+import { COLLECTIONS } from '../lib/collections';
 import { logger } from '../lib/logger';
+import { Timestamp } from 'firebase/firestore';
+import type { Vendor, Profile } from '../types/firestore';
 
 export interface ReferralStats {
   totalReferrals: number;
@@ -34,27 +37,45 @@ export interface MarketerInfo {
 
 class ReferralService {
   async getVendorReferralCode(vendorId: string): Promise<string | null> {
-    const { data, error } = await supabase
-      .from('vendors')
-      .select('referral_code')
-      .eq('id', vendorId)
-      .maybeSingle();
-
-    if (error) {
+    try {
+      const vendor = await FirestoreService.getDocument<Vendor>(COLLECTIONS.VENDORS, vendorId);
+      return vendor?.referral_code || null;
+    } catch (error) {
       logger.error('Error fetching vendor referral code:', error);
       return null;
     }
-
-    return data?.referral_code || null;
   }
 
   async getVendorReferralStats(vendorId: string): Promise<ReferralStats> {
-    const { data: referrals, error } = await supabase
-      .from('vendor_referrals')
-      .select('status, commission_amount, commission_paid')
-      .eq('referrer_vendor_id', vendorId);
+    try {
+      const referrals = await FirestoreService.getDocuments<any>(COLLECTIONS.VENDOR_REFERRALS, {
+        filters: [{ field: 'referrer_vendor_id', operator: '==', value: vendorId }]
+      });
 
-    if (error) {
+      return referrals.reduce(
+        (acc, ref) => {
+          acc.totalReferrals++;
+          if (ref.status === 'completed') {
+            acc.completedReferrals++;
+            if (ref.commission_paid) {
+              acc.totalCommissionEarned += Number(ref.commission_amount || 0);
+            } else {
+              acc.pendingCommission += Number(ref.commission_amount || 0);
+            }
+          } else if (ref.status === 'pending') {
+            acc.pendingReferrals++;
+          }
+          return acc;
+        },
+        {
+          totalReferrals: 0,
+          completedReferrals: 0,
+          pendingReferrals: 0,
+          totalCommissionEarned: 0,
+          pendingCommission: 0,
+        }
+      );
+    } catch (error) {
       logger.error('Error fetching referral stats:', error);
       return {
         totalReferrals: 0,
@@ -64,85 +85,50 @@ class ReferralService {
         pendingCommission: 0,
       };
     }
-
-    const stats = referrals.reduce(
-      (acc, ref) => {
-        acc.totalReferrals++;
-        if (ref.status === 'completed') {
-          acc.completedReferrals++;
-          if (ref.commission_paid) {
-            acc.totalCommissionEarned += Number(ref.commission_amount || 0);
-          } else {
-            acc.pendingCommission += Number(ref.commission_amount || 0);
-          }
-        } else if (ref.status === 'pending') {
-          acc.pendingReferrals++;
-        }
-        return acc;
-      },
-      {
-        totalReferrals: 0,
-        completedReferrals: 0,
-        pendingReferrals: 0,
-        totalCommissionEarned: 0,
-        pendingCommission: 0,
-      }
-    );
-
-    return stats;
   }
 
   async getVendorReferrals(vendorId: string): Promise<VendorReferral[]> {
-    const { data, error } = await supabase
-      .from('vendor_referrals')
-      .select(`
-        id,
-        referred_vendor_id,
-        status,
-        commission_amount,
-        commission_paid,
-        created_at,
-        vendors!vendor_referrals_referred_vendor_id_fkey (
-          business_name,
-          user_id
-        )
-      `)
-      .eq('referrer_vendor_id', vendorId)
-      .order('created_at', { ascending: false });
+    try {
+      const referrals = await FirestoreService.getDocuments<any>(COLLECTIONS.VENDOR_REFERRALS, {
+        filters: [{ field: 'referrer_vendor_id', operator: '==', value: vendorId }],
+        orderByField: 'created_at',
+        orderByDirection: 'desc'
+      });
 
-    if (error) {
+      const referralsWithDetails = await Promise.all(
+        referrals.map(async (ref) => {
+          let vendorName = 'Unknown Vendor';
+          let vendorEmail = '';
+
+          if (ref.referred_vendor_id) {
+            const vendor = await FirestoreService.getDocument<Vendor>(COLLECTIONS.VENDORS, ref.referred_vendor_id);
+            if (vendor) {
+              vendorName = vendor.business_name;
+              if (vendor.user_id) {
+                const profile = await FirestoreService.getDocument<Profile>(COLLECTIONS.PROFILES, vendor.user_id);
+                vendorEmail = profile?.email || '';
+              }
+            }
+          }
+
+          return {
+            id: ref.id,
+            referredVendorId: ref.referred_vendor_id,
+            referredVendorName: vendorName,
+            referredVendorEmail: vendorEmail,
+            status: ref.status,
+            commissionAmount: Number(ref.commission_amount || 0),
+            commissionPaid: ref.commission_paid,
+            createdAt: ref.created_at?.toDate?.()?.toISOString() || new Date().toISOString(),
+          };
+        })
+      );
+
+      return referralsWithDetails;
+    } catch (error) {
       logger.error('Error fetching vendor referrals:', error);
       return [];
     }
-
-    const referralsWithDetails = await Promise.all(
-      (data || []).map(async (ref) => {
-        const vendor = ref.vendors;
-        let email = '';
-
-        if (vendor?.user_id) {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('email')
-            .eq('id', vendor.user_id)
-            .maybeSingle();
-          email = profile?.email || '';
-        }
-
-        return {
-          id: ref.id,
-          referredVendorId: ref.referred_vendor_id,
-          referredVendorName: vendor?.business_name || 'Unknown Vendor',
-          referredVendorEmail: email,
-          status: ref.status,
-          commissionAmount: Number(ref.commission_amount || 0),
-          commissionPaid: ref.commission_paid,
-          createdAt: ref.created_at,
-        };
-      })
-    );
-
-    return referralsWithDetails;
   }
 
   async validateReferralCode(code: string): Promise<{
@@ -150,30 +136,35 @@ class ReferralService {
     type: 'vendor' | 'marketer' | null;
     referrerId: string | null;
   }> {
-    if (code.startsWith('VND-')) {
-      const { data, error } = await supabase
-        .from('vendors')
-        .select('id')
-        .eq('referral_code', code)
-        .maybeSingle();
+    try {
+      if (code.startsWith('VND-')) {
+        const vendors = await FirestoreService.getDocuments<Vendor>(COLLECTIONS.VENDORS, {
+          filters: [{ field: 'referral_code', operator: '==', value: code }],
+          limitCount: 1
+        });
 
-      if (!error && data) {
-        return { valid: true, type: 'vendor', referrerId: data.id };
-      }
-    } else if (code.startsWith('MKT-')) {
-      const { data, error } = await supabase
-        .from('marketers')
-        .select('id')
-        .eq('referral_code', code)
-        .eq('status', 'active')
-        .maybeSingle();
+        if (vendors.length > 0) {
+          return { valid: true, type: 'vendor', referrerId: vendors[0].id };
+        }
+      } else if (code.startsWith('MKT-')) {
+        const marketers = await FirestoreService.getDocuments<any>(COLLECTIONS.MARKETERS, {
+          filters: [
+            { field: 'referral_code', operator: '==', value: code },
+            { field: 'status', operator: '==', value: 'active' }
+          ],
+          limitCount: 1
+        });
 
-      if (!error && data) {
-        return { valid: true, type: 'marketer', referrerId: data.id };
+        if (marketers.length > 0) {
+          return { valid: true, type: 'marketer', referrerId: marketers[0].id };
+        }
       }
+
+      return { valid: false, type: null, referrerId: null };
+    } catch (error) {
+      logger.error('Error validating referral code:', error);
+      return { valid: false, type: null, referrerId: null };
     }
-
-    return { valid: false, type: null, referrerId: null };
   }
 
   async createVendorReferral(
@@ -182,20 +173,22 @@ class ReferralService {
     referralCode: string,
     commissionAmount: number
   ): Promise<{ success: boolean; error?: string }> {
-    const { error } = await supabase.from('vendor_referrals').insert({
-      referrer_vendor_id: referrerVendorId,
-      referred_vendor_id: referredVendorId,
-      referral_code: referralCode,
-      commission_amount: commissionAmount,
-      status: 'completed',
-    });
+    try {
+      const id = `ref_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      await FirestoreService.setDocument(COLLECTIONS.VENDOR_REFERRALS, id, {
+        referrer_vendor_id: referrerVendorId,
+        referred_vendor_id: referredVendorId,
+        referral_code: referralCode,
+        commission_amount: commissionAmount,
+        status: 'completed',
+        created_at: Timestamp.now()
+      });
 
-    if (error) {
+      return { success: true };
+    } catch (error) {
       logger.error('Error creating vendor referral:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
-
-    return { success: true };
   }
 
   async createMarketerReferral(
@@ -204,50 +197,51 @@ class ReferralService {
     referralCode: string,
     commissionAmount: number
   ): Promise<{ success: boolean; error?: string }> {
-    const { error } = await supabase.from('marketer_referrals').insert({
-      marketer_id: marketerId,
-      vendor_id: vendorId,
-      referral_code: referralCode,
-      commission_amount: commissionAmount,
-      status: 'completed',
-    });
+    try {
+      const id = `ref_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      await FirestoreService.setDocument(COLLECTIONS.MARKETER_REFERRALS, id, {
+        marketer_id: marketerId,
+        vendor_id: vendorId,
+        referral_code: referralCode,
+        commission_amount: commissionAmount,
+        status: 'completed',
+        created_at: Timestamp.now()
+      });
 
-    if (error) {
+      return { success: true };
+    } catch (error) {
       logger.error('Error creating marketer referral:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
-
-    return { success: true };
   }
 
   async getCommissionSettings(): Promise<{
     vendorReferralAmount: number;
     marketerReferralAmount: number;
   }> {
-    const { data, error } = await supabase
-      .from('commission_settings')
-      .select('type, commission_amount')
-      .eq('is_active', true);
+    try {
+      const settings = await FirestoreService.getDocuments<any>(COLLECTIONS.COMMISSION_SETTINGS, {
+        filters: [{ field: 'is_active', operator: '==', value: true }]
+      });
 
-    if (error) {
+      const result = {
+        vendorReferralAmount: 5000,
+        marketerReferralAmount: 10000,
+      };
+
+      settings.forEach((setting) => {
+        if (setting.type === 'vendor_referral') {
+          result.vendorReferralAmount = Number(setting.commission_amount);
+        } else if (setting.type === 'marketer_referral') {
+          result.marketerReferralAmount = Number(setting.commission_amount);
+        }
+      });
+
+      return result;
+    } catch (error) {
       logger.error('Error fetching commission settings:', error);
       return { vendorReferralAmount: 5000, marketerReferralAmount: 10000 };
     }
-
-    const settings = {
-      vendorReferralAmount: 5000,
-      marketerReferralAmount: 10000,
-    };
-
-    data?.forEach((setting) => {
-      if (setting.type === 'vendor_referral') {
-        settings.vendorReferralAmount = Number(setting.commission_amount);
-      } else if (setting.type === 'marketer_referral') {
-        settings.marketerReferralAmount = Number(setting.commission_amount);
-      }
-    });
-
-    return settings;
   }
 
   async registerMarketer(data: {
@@ -259,38 +253,31 @@ class ReferralService {
   }): Promise<{ success: boolean; error?: string; marketerId?: string }> {
     try {
       // Check if marketer with this email already exists
-      const { data: existing } = await supabase
-        .from('marketers')
-        .select('id')
-        .eq('email', data.email)
-        .maybeSingle();
+      const existing = await FirestoreService.getDocuments<any>(COLLECTIONS.MARKETERS, {
+        filters: [{ field: 'email', operator: '==', value: data.email }],
+        limitCount: 1
+      });
 
-      if (existing) {
+      if (existing.length > 0) {
         return {
           success: false,
           error: 'A marketer account with this email already exists.'
         };
       }
 
-      const { data: marketer, error } = await supabase
-        .from('marketers')
-        .insert({
-          full_name: data.fullName,
-          email: data.email,
-          phone: data.phone,
-          business_name: data.businessName || null,
-          bank_account_details: data.bankAccountDetails || null,
-          status: 'pending',
-        })
-        .select('id')
-        .single();
+      const id = `mkt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      await FirestoreService.setDocument(COLLECTIONS.MARKETERS, id, {
+        full_name: data.fullName,
+        email: data.email,
+        phone: data.phone,
+        business_name: data.businessName || null,
+        bank_account_details: data.bankAccountDetails || null,
+        status: 'pending',
+        created_at: Timestamp.now(),
+        updated_at: Timestamp.now()
+      });
 
-      if (error) {
-        logger.error('Error registering marketer:', error);
-        return { success: false, error: error.message };
-      }
-
-      return { success: true, marketerId: marketer.id };
+      return { success: true, marketerId: id };
     } catch (err: any) {
       logger.error('Unexpected error in registerMarketer:', err);
       return {
@@ -301,53 +288,70 @@ class ReferralService {
   }
 
   async getMarketerByEmail(email: string): Promise<MarketerInfo | null> {
-    const { data, error } = await supabase
-      .from('marketers')
-      .select('*')
-      .eq('email', email)
-      .maybeSingle();
+    try {
+      const marketers = await FirestoreService.getDocuments<any>(COLLECTIONS.MARKETERS, {
+        filters: [{ field: 'email', operator: '==', value: email }],
+        limitCount: 1
+      });
 
-    if (error || !data) {
+      if (marketers.length === 0) {
+        return null;
+      }
+
+      const data = marketers[0];
+
+      return {
+        id: data.id,
+        fullName: data.full_name,
+        email: data.email,
+        phone: data.phone,
+        businessName: data.business_name || '',
+        referralCode: data.referral_code,
+        status: data.status,
+        totalReferrals: data.total_referrals || 0,
+        totalCommissionEarned: Number(data.total_commission_earned || 0),
+      };
+    } catch (error) {
+      logger.error('Error fetching marketer by email:', error);
       return null;
     }
-
-    return {
-      id: data.id,
-      fullName: data.full_name,
-      email: data.email,
-      phone: data.phone,
-      businessName: data.business_name || '',
-      referralCode: data.referral_code,
-      status: data.status,
-      totalReferrals: data.total_referrals,
-      totalCommissionEarned: Number(data.total_commission_earned || 0),
-    };
   }
 
   async getMarketerReferrals(marketerId: string): Promise<any[]> {
-    const { data, error } = await supabase
-      .from('marketer_referrals')
-      .select(`
-        id,
-        vendor_id,
-        status,
-        commission_amount,
-        commission_paid,
-        created_at,
-        vendors (
-          business_name,
-          user_id
-        )
-      `)
-      .eq('marketer_id', marketerId)
-      .order('created_at', { ascending: false });
+    try {
+      const referrals = await FirestoreService.getDocuments<any>(COLLECTIONS.MARKETER_REFERRALS, {
+        filters: [{ field: 'marketer_id', operator: '==', value: marketerId }],
+        orderByField: 'created_at',
+        orderByDirection: 'desc'
+      });
 
-    if (error) {
+      // Fetch vendor details for each referral
+      // This is N+1, but fine for now
+      const referralsWithDetails = await Promise.all(
+        referrals.map(async (ref) => {
+          let vendorName = 'Unknown Vendor';
+
+          if (ref.vendor_id) {
+            const vendor = await FirestoreService.getDocument<Vendor>(COLLECTIONS.VENDORS, ref.vendor_id);
+            if (vendor) {
+              vendorName = vendor.business_name;
+            }
+          }
+
+          return {
+            ...ref,
+            vendors: {
+              business_name: vendorName
+            }
+          };
+        })
+      );
+
+      return referralsWithDetails;
+    } catch (error) {
       logger.error('Error fetching marketer referrals:', error);
       return [];
     }
-
-    return data || [];
   }
 
   generateReferralLink(referralCode: string): string {

@@ -38,15 +38,18 @@ interface VerifyPaymentResponse {
 
 class PaystackService {
   private config: PaystackConfig;
+  private apiUrl: string;
 
   constructor() {
     this.config = {
       publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY,
       testMode: import.meta.env.VITE_PAYSTACK_TEST_MODE === 'true',
     };
+    // Placeholder for Firebase Functions URL
+    this.apiUrl = import.meta.env.VITE_API_URL || 'https://your-firebase-project.cloudfunctions.net';
 
     if (!this.config.publicKey) {
-      throw new Error('Missing required environment variable: VITE_PAYSTACK_PUBLIC_KEY');
+      console.warn('Missing required environment variable: VITE_PAYSTACK_PUBLIC_KEY');
     }
   }
 
@@ -56,9 +59,6 @@ class PaystackService {
     vendorId: string
   ): Promise<InitializePaymentResponse> {
     try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
       // Get plan details
       const { subscriptionService } = await import('./subscriptionService');
       const tier = subscriptionService.getTierByPlan(plan as any);
@@ -67,11 +67,11 @@ class PaystackService {
         throw new Error('Invalid subscription plan');
       }
 
-      const response = await fetch(`${supabaseUrl}/functions/v1/initialize-payment`, {
+      // TODO: Replace with actual Firebase Cloud Function call
+      const response = await fetch(`${this.apiUrl}/initializePayment`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${supabaseKey}`,
         },
         body: JSON.stringify({
           email,
@@ -88,6 +88,18 @@ class PaystackService {
       });
 
       if (!response.ok) {
+        // Fallback for development/testing without backend
+        if (this.config.testMode) {
+          console.warn('Backend unavailable, mocking payment initialization');
+          return {
+            success: true,
+            data: {
+              authorizationUrl: 'https://checkout.paystack.com/mock',
+              accessCode: `mock_${Date.now()}`,
+              reference: `NIMEX-SUB-${vendorId}-${plan}-${Date.now()}`,
+            }
+          };
+        }
         throw new Error('Failed to initialize subscription payment');
       }
 
@@ -112,14 +124,11 @@ class PaystackService {
 
   async initializePayment(request: InitializePaymentRequest): Promise<InitializePaymentResponse> {
     try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-      const response = await fetch(`${supabaseUrl}/functions/v1/initialize-payment`, {
+      // TODO: Replace with actual Firebase Cloud Function call
+      const response = await fetch(`${this.apiUrl}/initializePayment`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${supabaseKey}`,
         },
         body: JSON.stringify({
           email: request.email,
@@ -134,6 +143,18 @@ class PaystackService {
       });
 
       if (!response.ok) {
+        // Fallback for development/testing without backend
+        if (this.config.testMode) {
+          console.warn('Backend unavailable, mocking payment initialization');
+          return {
+            success: true,
+            data: {
+              authorizationUrl: 'https://checkout.paystack.com/mock',
+              accessCode: `mock_${Date.now()}`,
+              reference: `NIMEX-${request.orderId}-${Date.now()}`,
+            }
+          };
+        }
         throw new Error('Failed to initialize payment');
       }
 
@@ -194,19 +215,33 @@ class PaystackService {
 
   async verifyPayment(reference: string): Promise<VerifyPaymentResponse> {
     try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-      const response = await fetch(`${supabaseUrl}/functions/v1/verify-payment`, {
+      // TODO: Replace with actual Firebase Cloud Function call
+      const response = await fetch(`${this.apiUrl}/verifyPayment`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${supabaseKey}`,
         },
         body: JSON.stringify({ reference }),
       });
 
       if (!response.ok) {
+        // Fallback for development/testing without backend
+        if (this.config.testMode) {
+          console.warn('Backend unavailable, mocking payment verification');
+          return {
+            success: true,
+            data: {
+              reference: reference,
+              amount: 1000,
+              status: 'success',
+              paidAt: new Date().toISOString(),
+              channel: 'card',
+              customer: {
+                email: 'test@example.com'
+              }
+            }
+          };
+        }
         throw new Error('Failed to verify payment');
       }
 

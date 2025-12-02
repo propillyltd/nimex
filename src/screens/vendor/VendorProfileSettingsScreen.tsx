@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { MapPin, Building2, Phone, FileText, Save, Loader2 } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { MapPin, Building2, Phone, Save, Loader2 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { LocationPicker } from '../../components/maps';
+import { FirestoreService } from '../../services/firestore.service';
+import { COLLECTIONS } from '../../lib/collections';
+import { Timestamp } from 'firebase/firestore';
 
 interface Market {
   id: string;
@@ -12,6 +14,7 @@ interface Market {
   city: string;
   state: string;
   description: string | null;
+  is_active: boolean;
 }
 
 interface VendorProfile {
@@ -22,6 +25,8 @@ interface VendorProfile {
   business_phone: string | null;
   market_id: string | null;
   market_location_details: string | null;
+  business_lat: number | null;
+  business_lng: number | null;
 }
 
 export const VendorProfileSettingsScreen: React.FC = () => {
@@ -54,23 +59,16 @@ export const VendorProfileSettingsScreen: React.FC = () => {
     try {
       setLoading(true);
 
-      const { data: marketsData, error: marketsError } = await supabase
-        .from('markets')
-        .select('*')
-        .eq('is_active', true)
-        .order('name');
-
-      if (marketsError) throw marketsError;
+      // Fetch Markets
+      const marketsData = await FirestoreService.getDocuments<Market>(COLLECTIONS.MARKETS, {
+        filters: [{ field: 'is_active', operator: '==', value: true }],
+        orderByField: 'name'
+      });
       setMarkets(marketsData || []);
 
       if (user) {
-        const { data: vendorData, error: vendorError } = await supabase
-          .from('vendors')
-          .select('*')
-          .eq('user_id', user.id)
-          .single();
-
-        if (vendorError && vendorError.code !== 'PGRST116') throw vendorError;
+        // Fetch Vendor Data
+        const vendorData = await FirestoreService.getDocument<VendorProfile>(COLLECTIONS.VENDORS, user.uid);
 
         if (vendorData) {
           setFormData({
@@ -106,16 +104,8 @@ export const VendorProfileSettingsScreen: React.FC = () => {
     try {
       if (!user) throw new Error('User not authenticated');
 
-      const { data: vendor, error: vendorCheckError } = await supabase
-        .from('vendors')
-        .select('id')
-        .eq('user_id', user.id)
-        .maybeSingle();
-
-      if (vendorCheckError) throw vendorCheckError;
-
       const vendorPayload = {
-        user_id: user.id,
+        user_id: user.uid,
         business_name: formData.businessName,
         business_description: formData.businessDescription,
         business_address: formData.businessAddress,
@@ -124,22 +114,16 @@ export const VendorProfileSettingsScreen: React.FC = () => {
         market_location_details: formData.marketLocationDetails || null,
         business_lat: formData.businessLat,
         business_lng: formData.businessLng,
-        updated_at: new Date().toISOString(),
+        updated_at: Timestamp.now(),
       };
 
-      if (vendor) {
-        const { error: updateError } = await supabase
-          .from('vendors')
-          .update(vendorPayload)
-          .eq('id', vendor.id);
+      // Check if vendor exists
+      const exists = await FirestoreService.documentExists(COLLECTIONS.VENDORS, user.uid);
 
-        if (updateError) throw updateError;
+      if (exists) {
+        await FirestoreService.updateDocument(COLLECTIONS.VENDORS, user.uid, vendorPayload);
       } else {
-        const { error: insertError } = await supabase
-          .from('vendors')
-          .insert(vendorPayload);
-
-        if (insertError) throw insertError;
+        await FirestoreService.setDocument(COLLECTIONS.VENDORS, user.uid, vendorPayload);
       }
 
       setSuccess('Profile updated successfully!');
@@ -274,10 +258,10 @@ export const VendorProfileSettingsScreen: React.FC = () => {
                     initialLocation={
                       formData.businessLat && formData.businessLng
                         ? {
-                            lat: formData.businessLat,
-                            lng: formData.businessLng,
-                            address: formData.businessAddress,
-                          }
+                          lat: formData.businessLat,
+                          lng: formData.businessLng,
+                          address: formData.businessAddress || '',
+                        }
                         : undefined
                     }
                     onLocationSelect={(location) => {

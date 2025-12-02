@@ -4,7 +4,7 @@ import { ShoppingBag, MapPin, CreditCard, Truck, AlertCircle, CheckCircle } from
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { firestoreService, where, orderBy } from '../services/firestoreService';
 import { orderService } from '../services/orderService';
 import { paystackService } from '../services/paystackService';
 import { deliveryService } from '../services/deliveryService';
@@ -76,21 +76,19 @@ export const CheckoutScreen: React.FC = () => {
   const loadAddresses = async () => {
     if (!user) return;
 
-    const { data, error } = await supabase
-      .from('addresses')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('is_default', { ascending: false });
+    try {
+      const fetchedAddresses = await firestoreService.getDocuments<Address>('addresses', [
+        where('user_id', '==', user.uid),
+        orderBy('is_default', 'desc')
+      ]);
 
-    if (error) {
+      setAddresses(fetchedAddresses);
+      if (fetchedAddresses.length > 0) {
+        const defaultAddress = fetchedAddresses.find((addr) => addr.is_default) || fetchedAddresses[0];
+        setSelectedAddressId(defaultAddress.id);
+      }
+    } catch (error) {
       console.error('Error loading addresses:', error);
-      return;
-    }
-
-    setAddresses(data || []);
-    if (data && data.length > 0) {
-      const defaultAddress = data.find((addr) => addr.is_default) || data[0];
-      setSelectedAddressId(defaultAddress.id);
     }
   };
 
@@ -132,31 +130,30 @@ export const CheckoutScreen: React.FC = () => {
       return;
     }
 
-    const { data, error } = await supabase
-      .from('addresses')
-      .insert({
-        user_id: user.id,
+    try {
+      const addressData = {
+        user_id: user.uid,
         ...newAddress,
         is_default: addresses.length === 0,
-      })
-      .select()
-      .single();
+      };
 
-    if (error) {
+      const addressId = await firestoreService.createDocument('addresses', addressData);
+
+      const newAddressWithId = { ...addressData, id: addressId } as Address;
+      setAddresses([...addresses, newAddressWithId]);
+      setSelectedAddressId(addressId);
+      setShowAddressForm(false);
+      setNewAddress({
+        full_name: '',
+        phone: '',
+        address_line1: '',
+        city: '',
+        state: '',
+      });
+    } catch (error) {
+      console.error('Error adding address:', error);
       setError('Failed to add address');
-      return;
     }
-
-    setAddresses([...addresses, data]);
-    setSelectedAddressId(data.id);
-    setShowAddressForm(false);
-    setNewAddress({
-      full_name: '',
-      phone: '',
-      address_line1: '',
-      city: '',
-      state: '',
-    });
   };
 
   const handleCheckout = async () => {
@@ -179,7 +176,7 @@ export const CheckoutScreen: React.FC = () => {
 
       const orderPromises = Object.entries(vendorItems).map(async ([vendorId, items]) => {
         const orderResult = await orderService.createOrder({
-          buyerId: user.id,
+          buyerId: user.uid,
           vendorId,
           items: items.map((item) => ({
             productId: item.product_id,
@@ -219,7 +216,7 @@ export const CheckoutScreen: React.FC = () => {
         orderId: firstOrder.data.orderId,
         metadata: {
           order_ids: orderResults.map((r) => r.data?.orderId).filter(Boolean),
-          buyer_id: user.id,
+          buyer_id: user.uid,
         },
       });
 
@@ -313,11 +310,10 @@ export const CheckoutScreen: React.FC = () => {
                       <div
                         key={address.id}
                         onClick={() => setSelectedAddressId(address.id)}
-                        className={`p-4 border-2 rounded-lg cursor-pointer transition-colors ${
-                          selectedAddressId === address.id
-                            ? 'border-primary-500 bg-primary-50'
-                            : 'border-neutral-200 hover:border-neutral-300'
-                        }`}
+                        className={`p-4 border-2 rounded-lg cursor-pointer transition-colors ${selectedAddressId === address.id
+                          ? 'border-primary-500 bg-primary-50'
+                          : 'border-neutral-200 hover:border-neutral-300'
+                          }`}
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
@@ -467,11 +463,10 @@ export const CheckoutScreen: React.FC = () => {
                     <div
                       key={option.type}
                       onClick={() => setDeliveryType(option.type)}
-                      className={`p-4 border-2 rounded-lg cursor-pointer transition-colors ${
-                        deliveryType === option.type
-                          ? 'border-primary-500 bg-primary-50'
-                          : 'border-neutral-200 hover:border-neutral-300'
-                      }`}
+                      className={`p-4 border-2 rounded-lg cursor-pointer transition-colors ${deliveryType === option.type
+                        ? 'border-primary-500 bg-primary-50'
+                        : 'border-neutral-200 hover:border-neutral-300'
+                        }`}
                     >
                       <div className="flex items-center justify-between">
                         <div>

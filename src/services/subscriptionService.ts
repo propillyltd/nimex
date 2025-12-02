@@ -1,5 +1,8 @@
-import { supabase } from '../lib/supabase';
-import type { SubscriptionPlan, SubscriptionStatus } from '../types/database';
+import { FirestoreService } from './firestore.service';
+import { COLLECTIONS } from '../lib/collections';
+import { logger } from '../lib/logger';
+import { Timestamp } from 'firebase/firestore';
+import type { Vendor, SubscriptionPlan, SubscriptionStatus } from '../types/firestore';
 
 interface SubscriptionTier {
   plan: SubscriptionPlan;
@@ -111,23 +114,29 @@ class SubscriptionService {
    */
   async getVendorSubscription(vendorId: string) {
     try {
-      const { data, error } = await supabase
-        .from('vendors')
-        .select('subscription_plan, subscription_status, subscription_start_date, subscription_end_date')
-        .eq('id', vendorId)
-        .single();
+      const vendor = await FirestoreService.getDocument<Vendor>(COLLECTIONS.VENDORS, vendorId);
 
-      if (error) throw error;
+      if (!vendor) throw new Error('Vendor not found');
+
+      // Helper to convert timestamp/string to Date
+      const toDate = (val: any) => {
+        if (!val) return null;
+        if (val instanceof Timestamp) return val.toDate();
+        return new Date(val);
+      };
+
+      const startDate = toDate(vendor.subscription_start_date);
+      const endDate = toDate(vendor.subscription_end_date);
 
       return {
-        plan: data.subscription_plan,
-        status: data.subscription_status,
-        startDate: data.subscription_start_date ? new Date(data.subscription_start_date) : null,
-        endDate: data.subscription_end_date ? new Date(data.subscription_end_date) : null,
-        isActive: this.isSubscriptionActive(data.subscription_status, data.subscription_end_date ? new Date(data.subscription_end_date) : null)
+        plan: vendor.subscription_plan,
+        status: vendor.subscription_status,
+        startDate,
+        endDate,
+        isActive: this.isSubscriptionActive(vendor.subscription_status, endDate)
       };
     } catch (error) {
-      console.error('Error fetching vendor subscription:', error);
+      logger.error('Error fetching vendor subscription:', error);
       throw error;
     }
   }
@@ -140,29 +149,22 @@ class SubscriptionService {
       const startDate = new Date();
       const endDate = this.calculateEndDate(startDate, plan);
 
-      const { data, error } = await supabase
-        .from('vendors')
-        .update({
-          subscription_plan: plan,
-          subscription_status: 'active',
-          subscription_start_date: startDate.toISOString(),
-          subscription_end_date: endDate.toISOString()
-        })
-        .eq('id', vendorId)
-        .select()
-        .single();
-
-      if (error) throw error;
+      await FirestoreService.updateDocument(COLLECTIONS.VENDORS, vendorId, {
+        subscription_plan: plan,
+        subscription_status: 'active',
+        subscription_start_date: Timestamp.fromDate(startDate),
+        subscription_end_date: Timestamp.fromDate(endDate)
+      });
 
       return {
-        plan: data.subscription_plan,
-        status: data.subscription_status,
+        plan,
+        status: 'active' as SubscriptionStatus,
         startDate,
         endDate,
         isActive: true
       };
     } catch (error) {
-      console.error('Error updating vendor subscription:', error);
+      logger.error('Error updating vendor subscription:', error);
       throw error;
     }
   }
@@ -172,20 +174,13 @@ class SubscriptionService {
    */
   async cancelVendorSubscription(vendorId: string) {
     try {
-      const { data, error } = await supabase
-        .from('vendors')
-        .update({
-          subscription_status: 'cancelled'
-        })
-        .eq('id', vendorId)
-        .select()
-        .single();
+      await FirestoreService.updateDocument(COLLECTIONS.VENDORS, vendorId, {
+        subscription_status: 'cancelled'
+      });
 
-      if (error) throw error;
-
-      return data;
+      return { success: true };
     } catch (error) {
-      console.error('Error cancelling vendor subscription:', error);
+      logger.error('Error cancelling vendor subscription:', error);
       throw error;
     }
   }

@@ -3,8 +3,9 @@ import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Wallet, Plus, DollarSign, TrendingUp, AlertCircle, CheckCircle, Copy } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase';
 import { flutterwaveService } from '../../services/flutterwaveService';
+import { FirestoreService } from '../../services/firestore.service';
+import { COLLECTIONS } from '../../lib/collections';
 
 interface VendorData {
   id: string;
@@ -54,15 +55,9 @@ export const WalletScreen: React.FC = () => {
     if (!user) return;
 
     try {
-      const { data, error } = await supabase
-        .from('vendors')
-        .select('*')
-        .eq('user_id', user.id)
-        .maybeSingle();
-
-      if (error) throw error;
+      const data = await FirestoreService.getDocument<VendorData>(COLLECTIONS.VENDORS, user.uid);
       if (data) {
-        setVendorData(data as VendorData);
+        setVendorData(data);
       }
     } catch (err) {
       console.error('Error loading vendor data:', err);
@@ -75,23 +70,17 @@ export const WalletScreen: React.FC = () => {
     if (!user) return;
 
     try {
-      const { data: vendorData } = await supabase
-        .from('vendors')
-        .select('id')
-        .eq('user_id', user.id)
-        .maybeSingle();
-
+      const vendorData = await FirestoreService.getDocument<any>(COLLECTIONS.VENDORS, user.uid);
       if (!vendorData) return;
 
-      const { data, error } = await supabase
-        .from('vendor_payout_accounts')
-        .select('*')
-        .eq('vendor_id', vendorData.id)
-        .order('is_default', { ascending: false });
+      const data = await FirestoreService.getDocuments<PayoutAccount>(COLLECTIONS.VENDOR_PAYOUT_ACCOUNTS, {
+        filters: [{ field: 'vendor_id', operator: '==', value: vendorData.id || user.uid }],
+        orderByField: 'is_default',
+        orderByDirection: 'desc'
+      });
 
-      if (error) throw error;
       if (data) {
-        setPayoutAccounts(data as PayoutAccount[]);
+        setPayoutAccounts(data);
       }
     } catch (err) {
       console.error('Error loading payout accounts:', err);
@@ -106,7 +95,7 @@ export const WalletScreen: React.FC = () => {
     setSuccess('');
 
     try {
-      const result = await flutterwaveService.createVendorWallet(vendorData.id, {
+      const result = await flutterwaveService.createVendorWallet(vendorData.id || user.uid, {
         business_name: vendorData.business_name,
         email: user.email,
         phone: profile?.phone || '',
@@ -159,19 +148,16 @@ export const WalletScreen: React.FC = () => {
         return;
       }
 
-      const { error: insertError } = await supabase
-        .from('vendor_payout_accounts')
-        .insert({
-          vendor_id: vendorData.id,
-          bank_name: selectedBank.name,
-          bank_code: newAccount.bankCode,
-          account_number: newAccount.accountNumber,
-          account_name: resolved.accountName || '',
-          is_default: payoutAccounts.length === 0,
-          is_verified: true,
-        });
-
-      if (insertError) throw insertError;
+      const accountId = crypto.randomUUID();
+      await FirestoreService.setDocument(COLLECTIONS.VENDOR_PAYOUT_ACCOUNTS, accountId, {
+        vendor_id: vendorData.id || user?.uid,
+        bank_name: selectedBank.name,
+        bank_code: newAccount.bankCode,
+        account_number: newAccount.accountNumber,
+        account_name: resolved.accountName || '',
+        is_default: payoutAccounts.length === 0,
+        is_verified: true,
+      });
 
       setSuccess('Payout account added successfully');
       setShowAddAccount(false);

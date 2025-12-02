@@ -4,7 +4,7 @@ import { ArrowLeft, Heart, Share2, MessageCircle, ShoppingCart, MapPin, Star, Sh
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
-import { supabase } from '../lib/supabase';
+import { firestoreService, where } from '../services/firestoreService';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { sanitizeText } from '../lib/sanitization';
@@ -57,30 +57,22 @@ export const ProductDetailScreen: React.FC = () => {
 
   const fetchProductDetail = async () => {
     try {
-      const { data: productData, error: productError } = await supabase
-        .from('products')
-        .select('*')
-        .eq('id', id)
-        .maybeSingle();
-
-      if (productError) throw productError;
+      // Fetch product from Firestore
+      const productData = await firestoreService.getDocument<ProductDetail>('products', id!);
 
       if (productData) {
-        setProduct(productData as ProductDetail);
+        setProduct(productData);
 
-        await supabase
-          .from('products')
-          .update({ views_count: (productData.views_count || 0) + 1 })
-          .eq('id', id);
+        // Increment views count
+        await firestoreService.updateDocument('products', id!, {
+          views_count: (productData.views_count || 0) + 1
+        });
 
-        const { data: vendorData, error: vendorError } = await supabase
-          .from('vendors')
-          .select('*')
-          .eq('id', productData.vendor_id)
-          .maybeSingle();
+        // Fetch vendor data
+        const vendorData = await firestoreService.getDocument<Vendor>('vendors', productData.vendor_id);
 
-        if (!vendorError && vendorData) {
-          setVendor(vendorData as Vendor);
+        if (vendorData) {
+          setVendor(vendorData);
         }
       }
     } catch (error) {
@@ -94,14 +86,12 @@ export const ProductDetailScreen: React.FC = () => {
     if (!user || !id) return;
 
     try {
-      const { data } = await supabase
-        .from('wishlists')
-        .select('id')
-        .eq('user_id', user.id)
-        .eq('product_id', id)
-        .maybeSingle();
+      const wishlists = await firestoreService.getDocuments('wishlists', [
+        where('user_id', '==', user.uid),
+        where('product_id', '==', id)
+      ]);
 
-      setIsFavorite(!!data);
+      setIsFavorite(wishlists.length > 0);
     } catch (error) {
       logger.error('Error checking favorite', error);
     }
@@ -115,19 +105,22 @@ export const ProductDetailScreen: React.FC = () => {
 
     try {
       if (isFavorite) {
-        await supabase
-          .from('wishlists')
-          .delete()
-          .eq('user_id', user.id)
-          .eq('product_id', id);
+        // Find and delete the wishlist item
+        const wishlists = await firestoreService.getDocuments('wishlists', [
+          where('user_id', '==', user.uid),
+          where('product_id', '==', id)
+        ]);
+
+        if (wishlists.length > 0) {
+          await firestoreService.deleteDocument('wishlists', wishlists[0].id);
+        }
         setIsFavorite(false);
       } else {
-        await supabase
-          .from('wishlists')
-          .insert({
-            user_id: user.id,
-            product_id: id!
-          });
+        // Add to wishlist
+        await firestoreService.createDocument('wishlists', {
+          user_id: user.uid,
+          product_id: id!
+        });
         setIsFavorite(true);
       }
     } catch (error) {
@@ -247,9 +240,8 @@ export const ProductDetailScreen: React.FC = () => {
                   <button
                     key={index}
                     onClick={() => setSelectedImage(index)}
-                    className={`aspect-square rounded-lg overflow-hidden border-2 transition-all ${
-                      selectedImage === index ? 'border-primary-500' : 'border-transparent'
-                    }`}
+                    className={`aspect-square rounded-lg overflow-hidden border-2 transition-all ${selectedImage === index ? 'border-primary-500' : 'border-transparent'
+                      }`}
                   >
                     <img
                       src={image}

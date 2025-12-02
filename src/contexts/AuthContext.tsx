@@ -1,11 +1,14 @@
 import React, { createContext, useContext, useEffect, useReducer, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../lib/supabase';
+import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { auth } from '../lib/firebase.config';
+import { FirebaseAuthService } from '../services/firebaseAuth.service';
+import { FirestoreService } from '../services/firestore.service';
+import { COLLECTIONS } from '../lib/collections';
 import { logger } from '../lib/logger';
 import { signUpSchema, signInSchema, updateProfileSchema, type SignUpInput, type SignInInput, type UpdateProfileInput } from '../lib/validation';
-import { TABLES, COLUMNS, ROUTES, STORAGE_KEYS } from '../services/constants';
+import { ROUTES, STORAGE_KEYS } from '../services/constants';
 import type { UserRole, Database } from '../types/database';
-import type { User, Session, AuthError } from '@supabase/supabase-js';
 
 type AdminPermission = Database['public']['Tables']['admin_permissions']['Row'];
 
@@ -14,19 +17,6 @@ interface AdminRole {
   display_name: string;
   permissions: AdminPermission[];
 }
-
-type AdminRoleAssignmentWithRole = {
-  role_id: string;
-  admin_roles: Database['public']['Tables']['admin_roles']['Row'];
-  role_permissions: Array<{
-    admin_permissions: AdminPermission;
-  }>;
-};
-
-type VendorOnboardingCheck = Pick<
-  Database['public']['Tables']['vendors']['Row'],
-  'business_name' | 'subscription_plan' | 'subscription_status'
->;
 
 interface Profile {
   id: string;
@@ -42,12 +32,11 @@ interface Profile {
 }
 
 interface AuthContextType {
-  user: User | null;
-  session: Session | null;
+  user: FirebaseUser | null;
   profile: Profile | null;
   loading: boolean;
-  signUp: (input: SignUpInput) => Promise<{ error: AuthError | Error | null }>;
-  signIn: (input: SignInInput) => Promise<{ error: AuthError | null }>;
+  signUp: (input: SignUpInput) => Promise<{ error: Error | null }>;
+  signIn: (input: SignInInput) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   updateProfile: (updates: UpdateProfileInput) => Promise<{ error: Error | null }>;
   hasPermission: (permission: string) => boolean;
@@ -55,15 +44,13 @@ interface AuthContextType {
 }
 
 interface AuthState {
-  user: User | null;
-  session: Session | null;
+  user: FirebaseUser | null;
   profile: Profile | null;
   loading: boolean;
 }
 
 type AuthAction =
-  | { type: 'SET_USER'; payload: User | null }
-  | { type: 'SET_SESSION'; payload: Session | null }
+  | { type: 'SET_USER'; payload: FirebaseUser | null }
   | { type: 'SET_PROFILE'; payload: Profile | null }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'RESET' };
@@ -72,14 +59,12 @@ const authReducer = (state: AuthState, action: AuthAction): AuthState => {
   switch (action.type) {
     case 'SET_USER':
       return { ...state, user: action.payload };
-    case 'SET_SESSION':
-      return { ...state, session: action.payload };
     case 'SET_PROFILE':
       return { ...state, profile: action.payload };
     case 'SET_LOADING':
       return { ...state, loading: action.payload };
     case 'RESET':
-      return { user: null, session: null, profile: null, loading: false };
+      return { user: null, profile: null, loading: false };
     default:
       return state;
   }
@@ -99,33 +84,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const navigate = useNavigate();
   const [state, dispatch] = useReducer(authReducer, {
     user: null,
-    session: null,
     profile: null,
     loading: true
   });
 
+  // Listen for Firebase auth state changes
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      dispatch({ type: 'SET_SESSION', payload: session });
-      dispatch({ type: 'SET_USER', payload: session?.user ?? null });
-      if (session?.user) {
-        fetchProfile(session.user.id);
-      } else {
-        dispatch({ type: 'SET_PROFILE', payload: null });
-      }
-      dispatch({ type: 'SET_LOADING', payload: false });
-    });
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      dispatch({ type: 'SET_USER', payload: user });
 
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      dispatch({ type: 'SET_SESSION', payload: session });
-      dispatch({ type: 'SET_USER', payload: session?.user ?? null });
-
-      if (session?.user) {
-        await fetchProfile(session.user.id);
+      if (user) {
+        await fetchProfile(user.uid);
       } else {
         dispatch({ type: 'SET_PROFILE', payload: null });
       }
@@ -133,270 +102,180 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       dispatch({ type: 'SET_LOADING', payload: false });
     });
 
-    return () => subscription.unsubscribe();
+    return () => unsubscribe();
   }, []);
 
   // Real-time subscription for KYC status changes
   useEffect(() => {
-    if (!state.user?.id) return;
+    if (!state.user?.uid) return;
 
-    const kycSubscription = supabase
-      .channel('kyc_status_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'kyc_submissions',
-          filter: `user_id=eq.${state.user.id}`,
-        },
-        (payload) => {
-          logger.info('KYC status changed, refreshing profile');
-          fetchProfile(state.user!.id);
-        }
-      )
-      .subscribe();
+    const unsubscribe = FirestoreService.subscribeToQuery(
+      COLLECTIONS.KYC_SUBMISSIONS,
+      {
+        filters: [{ field: 'user_id', operator: '==', value: state.user.uid }],
+      },
+      () => {
+        logger.info('KYC status changed, refreshing profile');
+        fetchProfile(state.user!.uid);
+      }
+    );
 
-    return () => {
-      kycSubscription.unsubscribe();
-    };
-  }, [state.user?.id]);
+    return () => unsubscribe();
+  }, [state.user?.uid]);
 
-  // Real-time subscription for vendor subscription status changes
+  // Real-time subscription for vendor status changes
   useEffect(() => {
-    if (!state.user?.id) return;
+    if (!state.user?.uid) return;
 
-    const vendorSubscription = supabase
-      .channel('vendor_status_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'vendors',
-          filter: `user_id=eq.${state.user.id}`,
-        },
-        (payload) => {
-          logger.info('Vendor status changed, refreshing profile');
-          fetchProfile(state.user!.id);
-        }
-      )
-      .subscribe();
+    const unsubscribe = FirestoreService.subscribeToDocument(
+      COLLECTIONS.VENDORS,
+      state.user.uid,
+      () => {
+        logger.info('Vendor status changed, refreshing profile');
+        fetchProfile(state.user!.uid);
+      }
+    );
 
-    return () => {
-      vendorSubscription.unsubscribe();
-    };
-  }, [state.user?.id]);
-
-  // Real-time subscription for product status changes (for vendors to see their product approvals)
-  useEffect(() => {
-    if (!state.user?.id) return;
-
-    const productSubscription = supabase
-      .channel('product_status_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'products',
-          filter: `vendor_id=eq.${state.user.id}`,
-        },
-        (payload) => {
-          logger.info('Product status changed, vendor may need to refresh product list');
-          // Vendors can refresh their product listings when status changes
-        }
-      )
-      .subscribe();
-
-    return () => {
-      productSubscription.unsubscribe();
-    };
-  }, [state.user?.id]);
+    return () => unsubscribe();
+  }, [state.user?.uid]);
 
   // Real-time subscription for admin role assignment changes
   useEffect(() => {
-    if (!state.user?.id) return;
+    if (!state.user?.uid) return;
 
-    const roleSubscription = supabase
-      .channel('role_assignment_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'admin_role_assignments',
-          filter: `user_id=eq.${state.user.id}`,
-        },
-        (payload) => {
-          logger.info('Admin role assignment changed, refreshing profile');
-          fetchProfile(state.user!.id);
-        }
-      )
-      .subscribe();
+    const unsubscribe = FirestoreService.subscribeToQuery(
+      COLLECTIONS.ADMIN_ROLE_ASSIGNMENTS,
+      {
+        filters: [{ field: 'user_id', operator: '==', value: state.user.uid }],
+      },
+      () => {
+        logger.info('Admin role assignment changed, refreshing profile');
+        fetchProfile(state.user!.uid);
+      }
+    );
 
-    return () => {
-      roleSubscription.unsubscribe();
-    };
-  }, [state.user?.id]);
+    return () => unsubscribe();
+  }, [state.user?.uid]);
 
-  // Real-time subscription for commission/marketer changes
-  useEffect(() => {
-    if (!state.user?.id) return;
-
-    const commissionSubscription = supabase
-      .channel('commission_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'commission_payments',
-          filter: `user_id=eq.${state.user.id}`,
-        },
-        (payload) => {
-          logger.info('Commission payment changed, user may need to refresh commission data');
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'vendor_referrals',
-          filter: `referrer_id=eq.${state.user.id}`,
-        },
-        (payload) => {
-          logger.info('Vendor referral changed, user may need to refresh referral data');
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'marketer_referrals',
-          filter: `referrer_id=eq.${state.user.id}`,
-        },
-        (payload) => {
-          logger.info('Marketer referral changed, user may need to refresh referral data');
-        }
-      )
-      .subscribe();
-
-    return () => {
-      commissionSubscription.unsubscribe();
-    };
-  }, [state.user?.id]);
-
+  /**
+   * Fetch basic profile from Firestore
+   */
   const fetchBasicProfile = async (userId: string): Promise<Profile | null> => {
     logger.info(`Fetching basic profile for user: ${userId}`);
-    const { data, error } = await supabase
-      .from(TABLES.PROFILES)
-      .select('*')
-      .eq(COLUMNS.PROFILES.ID, userId)
-      .maybeSingle();
 
-    if (error) {
-      logger.error('Database error fetching profile', error);
-      throw error;
-    }
+    const profileData = await FirestoreService.getDocument<Profile>(
+      COLLECTIONS.PROFILES,
+      userId
+    );
 
-    return data as Profile | null;
-  };
-
-  const loadAdminData = async (userId: string): Promise<{ roles: AdminRole[]; permissions: string[] }> => {
-    logger.info(`Loading admin data for user: ${userId}`);
-
-    const { data: roleAssignments, error: roleError } = await supabase
-      .from(TABLES.ADMIN_ROLE_ASSIGNMENTS)
-      .select(`
-        ${COLUMNS.ADMIN_ROLE_ASSIGNMENTS.ROLE_ID},
-        ${TABLES.ADMIN_ROLES}!inner (
-          id,
-          name,
-          display_name
-        ),
-        ${TABLES.ROLE_PERMISSIONS}!inner (
-          ${TABLES.ADMIN_PERMISSIONS}!inner (
-            name,
-            category,
-            description
-          )
-        )
-      `)
-      .eq(COLUMNS.ADMIN_ROLE_ASSIGNMENTS.USER_ID, userId);
-
-    if (roleError) {
-      logger.error('Error fetching admin role assignments', roleError);
-      return { roles: [], permissions: [] };
-    }
-
-    if (!roleAssignments) {
-      return { roles: [], permissions: [] };
-    }
-
-    const roles: AdminRole[] = [];
-    const permissions: string[] = [];
-
-    (roleAssignments as AdminRoleAssignmentWithRole[]).forEach(ra => {
-      if (ra.admin_roles) {
-        roles.push({
-          name: ra.admin_roles.name,
-          display_name: ra.admin_roles.display_name,
-          permissions: ra.role_permissions?.map(rp => rp.admin_permissions).filter(Boolean) || []
-        });
-      }
-
-      ra.role_permissions?.forEach(rp => {
-        if (rp.admin_permissions?.name) {
-          permissions.push(rp.admin_permissions.name);
-        }
-      });
-    });
-
-    return { roles, permissions };
-  };
-
-  const checkVendorOnboarding = async (userId: string): Promise<boolean> => {
-    logger.info(`Checking vendor onboarding for user: ${userId}`);
-
-    const { data: vendorData, error: vendorError } = await supabase
-      .from(TABLES.VENDORS)
-      .select(`${COLUMNS.VENDORS.BUSINESS_NAME}, ${COLUMNS.VENDORS.SUBSCRIPTION_PLAN}, ${COLUMNS.VENDORS.SUBSCRIPTION_STATUS}`)
-      .eq(COLUMNS.VENDORS.USER_ID, userId)
-      .maybeSingle();
-
-    if (vendorError) {
-      logger.error('Error fetching vendor data', vendorError);
-      return true; // Assume onboarding needed if error
-    }
-
-    if (!vendorData) {
-      return true; // No vendor record
-    }
-
-    const businessName = (vendorData as VendorOnboardingCheck).business_name || '';
-    const hasBusinessName = businessName && businessName.trim() !== '';
-
-    // Also check KYC status
-    const { data: kycData, error: kycError } = await (supabase
-      .from('kyc_submissions') as any)
-      .select('status')
-      .eq('user_id', userId)
-      .eq('status', 'approved')
-      .maybeSingle();
-
-    const isKycApproved = !kycError && kycData !== null;
-
-    logger.info(`Vendor onboarding check: businessName=${hasBusinessName}, kycApproved=${isKycApproved}`);
-    return !hasBusinessName || !isKycApproved;
+    return profileData;
   };
 
   /**
-   * Fetches and processes user profile data including admin permissions and vendor onboarding status
-   * @param userId - The unique identifier of the user
-   * @returns Promise that resolves when profile data is fetched and processed
+   * Load admin roles and permissions
+   */
+  const loadAdminData = async (userId: string): Promise<{ roles: AdminRole[]; permissions: string[] }> => {
+    logger.info(`Loading admin data for user: ${userId}`);
+
+    try {
+      const roleAssignments = await FirestoreService.getDocuments(
+        COLLECTIONS.ADMIN_ROLE_ASSIGNMENTS,
+        {
+          filters: [{ field: 'user_id', operator: '==', value: userId }],
+        }
+      );
+
+      const roles: AdminRole[] = [];
+      const permissions: string[] = [];
+
+      for (const assignment of roleAssignments) {
+        const roleData: any = assignment;
+
+        // Get role details
+        const role = await FirestoreService.getDocument(
+          COLLECTIONS.ADMIN_ROLES,
+          roleData.role_id
+        );
+
+        if (role) {
+          // Get permissions for this role
+          const rolePermissions = await FirestoreService.getDocuments(
+            'role_permissions',
+            {
+              filters: [{ field: 'role_id', operator: '==', value: roleData.role_id }],
+            }
+          );
+
+          const permissionDetails: AdminPermission[] = [];
+          for (const rp of rolePermissions) {
+            const rpData: any = rp;
+            const permission = await FirestoreService.getDocument<AdminPermission>(
+              COLLECTIONS.ADMIN_PERMISSIONS,
+              rpData.permission_id
+            );
+            if (permission) {
+              permissionDetails.push(permission);
+              permissions.push(permission.name);
+            }
+          }
+
+          roles.push({
+            name: (role as any).name,
+            display_name: (role as any).display_name,
+            permissions: permissionDetails,
+          });
+        }
+      }
+
+      return { roles, permissions };
+    } catch (error) {
+      logger.error('Error loading admin data', error);
+      return { roles: [], permissions: [] };
+    }
+  };
+
+  /**
+   * Check if vendor needs onboarding
+   */
+  const checkVendorOnboarding = async (userId: string): Promise<boolean> => {
+    logger.info(`Checking vendor onboarding for user: ${userId}`);
+
+    try {
+      const vendorData = await FirestoreService.getDocument(
+        COLLECTIONS.VENDORS,
+        userId
+      );
+
+      if (!vendorData) {
+        return true; // No vendor record
+      }
+
+      const vendor: any = vendorData;
+      const hasBusinessName = vendor.business_name && vendor.business_name.trim() !== '';
+
+      // Check KYC status
+      const kycSubmissions = await FirestoreService.getDocuments(
+        COLLECTIONS.KYC_SUBMISSIONS,
+        {
+          filters: [
+            { field: 'user_id', operator: '==', value: userId },
+            { field: 'status', operator: '==', value: 'approved' },
+          ],
+        }
+      );
+
+      const isKycApproved = kycSubmissions.length > 0;
+
+      logger.info(`Vendor onboarding check: businessName=${hasBusinessName}, kycApproved=${isKycApproved}`);
+      return !hasBusinessName || !isKycApproved;
+    } catch (error) {
+      logger.error('Error checking vendor onboarding', error);
+      return true; // Assume onboarding needed if error
+    }
+  };
+
+  /**
+   * Fetch and process user profile data
    */
   const fetchProfile = async (userId: string): Promise<void> => {
     try {
@@ -429,81 +308,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const createAuthUser = async (input: SignUpInput) => {
-    logger.info(`Creating auth user for: ${input.email}`);
-
-    const { data, error } = await supabase.auth.signUp({
-      email: input.email,
-      password: input.password,
-      options: {
-        data: {
-          full_name: input.fullName,
-          role: input.role,
-        },
-        emailRedirectTo: window.location.origin
-      }
-    });
-
-    if (error) {
-      logger.error('Auth signup error', error);
-      return { data: null, error };
-    }
-
-    if (!data.user) {
-      const noUserError = new Error('No user data returned from signup');
-      logger.error('No user data returned from signup');
-      return { data: null, error: noUserError as AuthError };
-    }
-
-    return { data, error: null };
-  };
-
-  const createProfileRecord = async (userId: string, input: SignUpInput) => {
-    logger.info(`Creating profile record for user: ${userId}`);
-
-    const { error } = await (supabase
-      .from(TABLES.PROFILES) as any)
-      .insert({
-        id: userId,
-        email: input.email,
-        full_name: input.fullName,
-        role: input.role,
-      });
-
-    if (error) {
-      logger.error('Error creating profile', error);
-      return { error: new Error(`Failed to create profile: ${error.message}`) as AuthError };
-    }
-
-    return { error: null };
-  };
-
-  const createVendorRecord = async (userId: string) => {
-    logger.info(`Creating vendor record for user: ${userId}`);
-
-    const { error } = await (supabase
-      .from(TABLES.VENDORS) as any)
-      .insert({
-        user_id: userId,
-        business_name: '',
-        subscription_plan: 'free',
-        subscription_status: 'active',
-        subscription_start_date: new Date().toISOString(),
-        verification_badge: 'none',
-        verification_status: 'pending',
-        is_active: true,
-      });
-
-    if (error) {
-      logger.error('Error creating vendor record', error);
-      return { error: new Error(`Failed to create vendor record: ${error.message}`) as AuthError };
-    }
-
-    return { error: null };
-  };
-
   /**
-   * Signs up a new user with the specified role and creates associated profile/vendor records
+   * Sign up a new user
    */
   const signUp = async (input: SignUpInput) => {
     try {
@@ -512,40 +318,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!validationResult.success) {
         const error = new Error('Invalid input data');
         logger.error('SignUp validation failed', validationResult.error);
-        return { error: error as AuthError };
+        return { error };
       }
 
-      // Create auth user
-      const { data, error: authError } = await createAuthUser(input);
-      if (authError || !data?.user) {
+      // Create user with Firebase Auth
+      const { user, error: authError } = await FirebaseAuthService.signUp({
+        email: input.email,
+        password: input.password,
+        fullName: input.fullName,
+        role: input.role,
+      });
+
+      if (authError || !user) {
         return { error: authError };
-      }
-
-      // Create profile record
-      const profileError = await createProfileRecord(data.user.id, input);
-      if (profileError.error) {
-        return profileError;
-      }
-
-      // If vendor, create initial vendor record
-      if (input.role === 'vendor') {
-        const vendorError = await createVendorRecord(data.user.id);
-        if (vendorError.error) {
-          return vendorError;
-        }
       }
 
       logger.info('Signup completed successfully');
       return { error: null };
     } catch (error) {
       logger.error('Unexpected error during signup', error);
-      return { error: error as AuthError };
+      return { error: error as Error };
     }
   };
 
+  /**
+   * Sign in a user
+   */
   const signIn = async (input: SignInInput) => {
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      const { error } = await FirebaseAuthService.signIn({
         email: input.email,
         password: input.password,
       });
@@ -553,10 +354,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { error };
     } catch (error) {
       logger.error('Unexpected error during sign in', error);
-      return { error: error as AuthError };
+      return { error: error as Error };
     }
   };
 
+  /**
+   * Sign out the current user
+   */
   const signOut = async () => {
     try {
       // Clear local state first
@@ -565,8 +369,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Clear any local storage
       localStorage.removeItem(STORAGE_KEYS.CART);
 
-      // Sign out from Supabase
-      const { error } = await supabase.auth.signOut();
+      // Sign out from Firebase
+      const { error } = await FirebaseAuthService.signOut();
       if (error) {
         logger.error('Error signing out', error);
         // Don't throw - still navigate to login even if signOut fails
@@ -581,20 +385,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  /**
+   * Update user profile
+   */
   const updateProfile = async (updates: UpdateProfileInput) => {
     if (!state.user) {
       return { error: new Error('No user logged in') };
     }
 
     try {
-      const { error } = await (supabase
-        .from(TABLES.PROFILES) as any)
-        .update(updates)
-        .eq(COLUMNS.PROFILES.ID, state.user.id);
+      const { error } = await FirebaseAuthService.updateUserProfile(
+        state.user.uid,
+        updates as any
+      );
 
       if (error) throw error;
 
-      await fetchProfile(state.user.id);
+      await fetchProfile(state.user.uid);
       return { error: null };
     } catch (error) {
       logger.error('Error updating profile', error);
@@ -602,18 +409,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  /**
+   * Check if user has a specific permission
+   */
   const hasPermission = useMemo(() => (permission: string): boolean => {
     if (!state.profile || state.profile.role !== 'admin') return false;
     return state.profile.adminPermissions?.includes(permission) ?? false;
   }, [state.profile]);
 
+  /**
+   * Check if user is admin
+   */
   const isAdmin = useMemo(() => (): boolean => {
     return state.profile?.role === 'admin';
   }, [state.profile]);
 
   const value: AuthContextType = {
     user: state.user,
-    session: state.session,
     profile: state.profile,
     loading: state.loading,
     signUp,

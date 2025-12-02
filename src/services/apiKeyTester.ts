@@ -1,4 +1,5 @@
 import { healthCheckService } from './healthCheckService';
+import { auth } from '../lib/firebase.config';
 
 interface APIKeyTestResult {
   service: string;
@@ -11,8 +12,8 @@ class APIKeyTester {
   async testAllAPIKeys(): Promise<APIKeyTestResult[]> {
     const results: APIKeyTestResult[] = [];
 
-    // Test Supabase
-    results.push(await this.testSupabase());
+    // Test Firebase
+    results.push(await this.testFirebase());
 
     // Test Twilio
     results.push(await this.testTwilio());
@@ -20,8 +21,8 @@ class APIKeyTester {
     // Test SendGrid (via health check)
     results.push(await this.testSendGrid());
 
-    // Test Clerk (basic validation)
-    results.push(await this.testClerk());
+    // Test Clerk (basic validation) - keeping for legacy if needed, or remove if not used
+    // results.push(await this.testClerk());
 
     // Test Google Maps
     results.push(await this.testGoogleMaps());
@@ -29,45 +30,40 @@ class APIKeyTester {
     return results;
   }
 
-  private async testSupabase(): Promise<APIKeyTestResult> {
+  private async testFirebase(): Promise<APIKeyTestResult> {
     try {
-      const url = process.env.VITE_SUPABASE_URL;
-      const key = process.env.VITE_SUPABASE_ANON_KEY;
+      const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
+      const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
 
-      if (!url || !key) {
+      if (!apiKey || !projectId) {
         return {
-          service: 'supabase',
+          service: 'firebase',
           status: 'missing_config',
-          error: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY'
+          error: 'Missing VITE_FIREBASE_API_KEY or VITE_FIREBASE_PROJECT_ID'
         };
       }
 
-      // Test basic connection
-      const response = await fetch(`${url}/rest/v1/`, {
-        method: 'GET',
-        headers: {
-          'apikey': key,
-          'Authorization': `Bearer ${key}`,
-        },
-      });
-
-      if (response.ok) {
+      // Check if auth is initialized
+      if (auth) {
         return {
-          service: 'supabase',
+          service: 'firebase',
           status: 'success',
-          details: { status: response.status, url }
+          details: {
+            projectId,
+            authDomain: auth.config.authDomain,
+            initialized: true
+          }
         };
       } else {
         return {
-          service: 'supabase',
+          service: 'firebase',
           status: 'failed',
-          error: `HTTP ${response.status}: ${response.statusText}`,
-          details: { status: response.status, url }
+          error: 'Firebase Auth not initialized'
         };
       }
     } catch (error) {
       return {
-        service: 'supabase',
+        service: 'firebase',
         status: 'failed',
         error: error instanceof Error ? error.message : 'Unknown error'
       };
@@ -76,9 +72,9 @@ class APIKeyTester {
 
   private async testTwilio(): Promise<APIKeyTestResult> {
     try {
-      const accountSid = process.env.VITE_TWILIO_ACCOUNT_SID;
-      const apiKey = process.env.VITE_TWILIO_API_KEY;
-      const apiSecret = process.env.VITE_TWILIO_API_SECRET;
+      const accountSid = import.meta.env.VITE_TWILIO_ACCOUNT_SID;
+      const apiKey = import.meta.env.VITE_TWILIO_API_KEY;
+      const apiSecret = import.meta.env.VITE_TWILIO_API_SECRET;
 
       if (!accountSid || !apiKey || !apiSecret) {
         return {
@@ -126,7 +122,7 @@ class APIKeyTester {
 
   private async testSendGrid(): Promise<APIKeyTestResult> {
     try {
-      const apiSecret = process.env.VITE_TWILIO_API_SECRET;
+      const apiSecret = import.meta.env.VITE_TWILIO_API_SECRET;
 
       if (!apiSecret) {
         return {
@@ -190,49 +186,9 @@ class APIKeyTester {
     }
   }
 
-  private async testClerk(): Promise<APIKeyTestResult> {
-    try {
-      const publishableKey = process.env.VITE_CLERK_PUBLISHABLE_KEY;
-
-      if (!publishableKey) {
-        return {
-          service: 'clerk',
-          status: 'missing_config',
-          error: 'Missing VITE_CLERK_PUBLISHABLE_KEY'
-        };
-      }
-
-      // Basic format validation
-      if (!publishableKey.startsWith('pk_')) {
-        return {
-          service: 'clerk',
-          status: 'failed',
-          error: 'Clerk key must start with "pk_"'
-        };
-      }
-
-      // Test basic connectivity (this is limited since Clerk keys are frontend-only)
-      // We'll do a basic format check and assume it's valid if format is correct
-      return {
-        service: 'clerk',
-        status: 'success',
-        details: {
-          keyFormat: 'valid',
-          keyType: publishableKey.includes('test') ? 'test' : 'live'
-        }
-      };
-    } catch (error) {
-      return {
-        service: 'clerk',
-        status: 'failed',
-        error: error instanceof Error ? error.message : 'Unknown error'
-      };
-    }
-  }
-
   private async testGoogleMaps(): Promise<APIKeyTestResult> {
     try {
-      const apiKey = process.env.VITE_GOOGLE_MAPS_API_KEY;
+      const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
       if (!apiKey) {
         return {

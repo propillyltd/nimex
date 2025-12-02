@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
+import { FirebaseStorageService } from '../../services/firebaseStorage.service';
+import { COLLECTIONS, STORAGE_PATHS } from '../../lib/collections';
 import { subscriptionService } from '../../services/subscriptionService';
 import { referralService } from '../../services/referralService';
 import { MARKET_LOCATIONS, type MarketLocation } from '../../data/marketLocations';
@@ -12,6 +14,7 @@ import { BusinessInfoStep } from '../../components/onboarding/BusinessInfoStep';
 import { DocumentsStep } from '../../components/onboarding/DocumentsStep';
 import { BankDetailsStep } from '../../components/onboarding/BankDetailsStep';
 import { SubscriptionStep } from '../../components/onboarding/SubscriptionStep';
+import { Timestamp } from 'firebase/firestore';
 
 // Constants
 const MAX_SUB_CATEGORY_TAGS = 3;
@@ -60,9 +63,9 @@ interface NotificationState {
 }
 
 export const VendorOnboardingScreen: React.FC = () => {
-   const navigate = useNavigate();
-   const { user, profile } = useAuth();
-   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const { user, profile } = useAuth();
+  const [searchParams] = useSearchParams();
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [referralData, setReferralData] = useState<{
@@ -240,22 +243,17 @@ export const VendorOnboardingScreen: React.FC = () => {
   const uploadFile = useCallback(async (file: File, path: string): Promise<string> => {
     const fileExt = file.name.split('.').pop();
     const fileName = `${Math.random()}.${fileExt}`;
-    const filePath = `${path}/${fileName}`;
+    // Use STORAGE_PATHS if available, or just construct path
+    const fullPath = `vendor-documents/${path}/${fileName}`;
 
     setUploadingFiles(prev => ({ ...prev, [path]: true }));
 
     try {
-      const { error: uploadError } = await supabase.storage
-        .from('vendor-documents')
-        .upload(filePath, file);
-
-      if (uploadError) throw uploadError;
-
-      const { data } = supabase.storage
-        .from('vendor-documents')
-        .getPublicUrl(filePath);
-
-      return data.publicUrl;
+      const downloadUrl = await FirebaseStorageService.uploadFile(file, fullPath);
+      return downloadUrl;
+    } catch (error) {
+      console.error('Upload error:', error);
+      throw error;
     } finally {
       setUploadingFiles(prev => ({ ...prev, [path]: false }));
     }
@@ -303,7 +301,7 @@ export const VendorOnboardingScreen: React.FC = () => {
 
       // Create vendor profile
       const vendorData = {
-        user_id: user.id,
+        user_id: user.uid, // Use user.uid for Firebase
         business_name: profileData.businessName,
         business_description: profileData.businessDescription,
         business_address: profileData.businessAddress,
@@ -316,22 +314,16 @@ export const VendorOnboardingScreen: React.FC = () => {
         verification_badge: calculateVerificationBadge(),
         subscription_plan: selectedSubscription as any,
         subscription_status: selectedSubscription === 'free' ? 'active' : 'inactive',
-        subscription_start_date: selectedSubscription === 'free' ? new Date().toISOString() : null,
+        subscription_start_date: selectedSubscription === 'free' ? Timestamp.now() : null,
         subscription_end_date: selectedSubscription === 'free' ? null : null, // Will be set after payment
         is_active: true
       };
 
-      const { data: insertedVendor, error } = await supabase
-        .from('vendors')
-        .update(vendorData)
-        .eq('user_id', user.id)
-        .select('id')
-        .single();
+      // Update vendor document
+      // Assuming vendor document ID is user.uid (created during signup)
+      await FirestoreService.updateDocument(COLLECTIONS.VENDORS, user.uid, vendorData);
 
-      if (error) throw error;
-
-      const vendorId = (insertedVendor as any)?.id;
-      if (!vendorId) throw new Error('Failed to create vendor record');
+      const vendorId = user.uid;
 
       // Handle referral tracking if referral code was used
       if (referralData.code && referralData.type && referralData.referrerId) {
@@ -406,17 +398,15 @@ export const VendorOnboardingScreen: React.FC = () => {
     <div className="flex items-center justify-center mb-8" role="progressbar" aria-valuenow={currentStep} aria-valuemin={1} aria-valuemax={4}>
       {[1, 2, 3, 4].map((step) => (
         <div key={step} className="flex items-center">
-          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${
-            step <= currentStep
+          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${step <= currentStep
               ? 'bg-primary-500 text-white'
               : 'bg-neutral-200 text-neutral-600'
-          }`}>
+            }`}>
             {step}
           </div>
           {step < 4 && (
-            <div className={`w-12 h-0.5 ${
-              step < currentStep ? 'bg-primary-500' : 'bg-neutral-200'
-            }`} />
+            <div className={`w-12 h-0.5 ${step < currentStep ? 'bg-primary-500' : 'bg-neutral-200'
+              }`} />
           )}
         </div>
       ))}

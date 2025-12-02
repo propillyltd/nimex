@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Plus, Search, Edit, Trash2, Eye, EyeOff, Loader2, Package } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
+import { FirestoreService } from '../../services/firestore.service';
+import { COLLECTIONS } from '../../lib/collections';
 
 interface Product {
   id: string;
@@ -14,8 +15,9 @@ interface Product {
   stock_quantity: number;
   is_active: boolean;
   image_url: string | null;
+  category_id?: string;
   category_name?: string;
-  created_at: string;
+  created_at: any;
 }
 
 export const ProductsManagementScreen: React.FC = () => {
@@ -35,31 +37,30 @@ export const ProductsManagementScreen: React.FC = () => {
     try {
       setLoading(true);
 
-      const { data: vendor } = await supabase
-        .from('vendors')
-        .select('id')
-        .eq('user_id', user?.id)
-        .maybeSingle();
+      if (!user) return;
+
+      // Get vendor ID
+      const vendor = await FirestoreService.getDocument<any>(COLLECTIONS.VENDORS, user.uid);
 
       if (!vendor) return;
 
-      const { data, error } = await supabase
-        .from('products')
-        .select(`
-          *,
-          categories (
-            name
-          )
-        `)
-        .eq('vendor_id', vendor.id)
-        .order('created_at', { ascending: false });
+      // Fetch products
+      const productsData = await FirestoreService.getDocuments<Product>(COLLECTIONS.PRODUCTS, {
+        filters: [{ field: 'vendor_id', operator: '==', value: vendor.id || user.uid }],
+        orderByField: 'created_at',
+        orderByDirection: 'desc'
+      });
 
-      if (error) throw error;
+      // Fetch categories to map names (since Firestore doesn't do joins)
+      // Optimization: Fetch only unique category IDs or fetch all categories if list is small
+      // For now, I'll fetch all categories as they are likely cached or not too many
+      const categories = await FirestoreService.getDocuments<any>(COLLECTIONS.CATEGORIES);
+      const categoryMap = new Map(categories.map(c => [c.id, c.name]));
 
-      const productsWithCategory = data?.map(p => ({
+      const productsWithCategory = productsData.map(p => ({
         ...p,
-        category_name: p.categories?.name
-      })) || [];
+        category_name: p.category_id ? categoryMap.get(p.category_id) : undefined
+      }));
 
       setProducts(productsWithCategory);
     } catch (error) {
@@ -71,12 +72,9 @@ export const ProductsManagementScreen: React.FC = () => {
 
   const toggleProductStatus = async (productId: string, currentStatus: boolean) => {
     try {
-      const { error } = await supabase
-        .from('products')
-        .update({ is_active: !currentStatus })
-        .eq('id', productId);
-
-      if (error) throw error;
+      await FirestoreService.updateDocument(COLLECTIONS.PRODUCTS, productId, {
+        is_active: !currentStatus
+      });
       await loadProducts();
     } catch (error) {
       console.error('Error toggling product status:', error);
@@ -87,12 +85,7 @@ export const ProductsManagementScreen: React.FC = () => {
     if (!confirm('Are you sure you want to delete this product?')) return;
 
     try {
-      const { error } = await supabase
-        .from('products')
-        .delete()
-        .eq('id', productId);
-
-      if (error) throw error;
+      await FirestoreService.deleteDocument(COLLECTIONS.PRODUCTS, productId);
       await loadProducts();
     } catch (error) {
       console.error('Error deleting product:', error);
@@ -234,13 +227,12 @@ export const ProductsManagementScreen: React.FC = () => {
                               {product.category_name}
                             </span>
                           )}
-                          <span className={`px-2 py-0.5 rounded text-xs ${
-                            product.stock_quantity > 10
+                          <span className={`px-2 py-0.5 rounded text-xs ${product.stock_quantity > 10
                               ? 'bg-green-100 text-green-700'
                               : product.stock_quantity > 0
-                              ? 'bg-yellow-100 text-yellow-700'
-                              : 'bg-red-100 text-red-700'
-                          }`}>
+                                ? 'bg-yellow-100 text-yellow-700'
+                                : 'bg-red-100 text-red-700'
+                            }`}>
                             {product.stock_quantity} in stock
                           </span>
                         </div>

@@ -13,8 +13,9 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase';
 import { referralService, type ReferralStats, type VendorReferral } from '../../services/referralService';
+import { FirestoreService } from '../../services/firestore.service';
+import { COLLECTIONS } from '../../lib/collections';
 
 export const ReferralsScreen: React.FC = () => {
   const { user } = useAuth();
@@ -39,11 +40,7 @@ export const ReferralsScreen: React.FC = () => {
     if (!user) return;
 
     try {
-      const { data: vendor } = await supabase
-        .from('vendors')
-        .select('id, referral_code')
-        .eq('user_id', user.id)
-        .maybeSingle();
+      const vendor = await FirestoreService.getDocument<any>(COLLECTIONS.VENDORS, user.uid);
 
       if (vendor) {
         setVendorId(vendor.id);

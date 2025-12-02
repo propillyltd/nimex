@@ -1,4 +1,8 @@
-import { supabase } from '../lib/supabase';
+import { FirestoreService } from './firestore.service';
+import { FirebaseStorageService } from './firebaseStorage.service';
+import { COLLECTIONS } from '../lib/collections';
+import { logger } from '../lib/logger';
+import { Timestamp } from 'firebase/firestore';
 import { giglService, CreateShipmentRequest } from './giglService';
 
 interface CreateDeliveryRequest {
@@ -66,14 +70,16 @@ class DeliveryService {
         throw new Error(shipmentResult.error || 'Failed to create GIGL shipment');
       }
 
-      const { data: delivery, error: deliveryError } = await supabase
-        .from('deliveries')
-        .insert({
+      const deliveryId = `delivery_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      await FirestoreService.runTransaction(async (transaction) => {
+        // Create delivery record
+        await FirestoreService.setDocument(COLLECTIONS.DELIVERIES, deliveryId, {
           order_id: request.orderId,
           vendor_id: request.vendorId,
           buyer_id: request.buyerId,
-          gigl_shipment_id: shipmentResult.data.shipmentId,
-          gigl_tracking_url: shipmentResult.data.trackingUrl,
+          gigl_shipment_id: shipmentResult.data!.shipmentId,
+          gigl_tracking_url: shipmentResult.data!.trackingUrl,
           pickup_address: request.pickupAddress,
           delivery_address: request.deliveryAddress,
           delivery_type: request.deliveryType,
@@ -84,49 +90,43 @@ class DeliveryService {
             height: request.packageDetails.height,
           },
           delivery_cost: request.deliveryCost,
-          estimated_delivery_date: shipmentResult.data.estimatedDeliveryDate,
+          estimated_delivery_date: shipmentResult.data!.estimatedDeliveryDate,
           delivery_status: 'pickup_scheduled',
           delivery_notes: request.deliveryNotes,
           gigl_response_data: shipmentResult,
-        })
-        .select()
-        .single();
+          created_at: Timestamp.now(),
+          updated_at: Timestamp.now(),
+        });
 
-      if (deliveryError || !delivery) {
-        throw new Error(deliveryError?.message || 'Failed to create delivery record');
-      }
+        // Add status history
+        const historyId = `history_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        await FirestoreService.setDocument(COLLECTIONS.DELIVERY_STATUS_HISTORY, historyId, {
+          delivery_id: deliveryId,
+          status: 'pickup_scheduled',
+          location: 'Pickup location',
+          notes: 'Shipment created and pickup scheduled',
+          updated_by: 'system',
+          created_at: Timestamp.now(),
+        });
 
-      await this.addStatusHistory(
-        delivery.id,
-        'pickup_scheduled',
-        'Pickup location',
-        'Shipment created and pickup scheduled',
-        'system'
-      );
-
-      const { error: orderError } = await supabase
-        .from('orders')
-        .update({
+        // Update order
+        await FirestoreService.updateDocument(COLLECTIONS.ORDERS, request.orderId, {
           status: 'processing',
-          tracking_number: shipmentResult.data.trackingNumber,
-        })
-        .eq('id', request.orderId);
-
-      if (orderError) {
-        console.error('Failed to update order with tracking:', orderError);
-      }
+          tracking_number: shipmentResult.data!.trackingNumber,
+        });
+      });
 
       return {
         success: true,
         data: {
-          deliveryId: delivery.id,
+          deliveryId,
           trackingNumber: shipmentResult.data.trackingNumber,
           trackingUrl: shipmentResult.data.trackingUrl,
           estimatedDeliveryDate: shipmentResult.data.estimatedDeliveryDate,
         },
       };
     } catch (error) {
-      console.error('Failed to create delivery:', error);
+      logger.error('Failed to create delivery:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to create delivery',
@@ -141,39 +141,45 @@ class DeliveryService {
     notes?: string
   ): Promise<{ success: boolean; error?: string }> {
     try {
-      const { error: updateError } = await supabase
-        .from('deliveries')
-        .update({
+      await FirestoreService.runTransaction(async (transaction) => {
+        // Update delivery
+        const updates: any = {
           delivery_status: status,
-          last_status_update: new Date().toISOString(),
-          ...(status === 'delivered' && { actual_delivery_date: new Date().toISOString() }),
-        })
-        .eq('id', deliveryId);
+          last_status_update: Timestamp.now(),
+        };
 
-      if (updateError) {
-        throw new Error(updateError.message);
-      }
-
-      await this.addStatusHistory(deliveryId, status, location, notes, 'gigl_webhook');
-
-      if (status === 'delivered') {
-        const { data: delivery } = await supabase
-          .from('deliveries')
-          .select('order_id')
-          .eq('id', deliveryId)
-          .single();
-
-        if (delivery) {
-          await supabase
-            .from('orders')
-            .update({ status: 'delivered', delivered_at: new Date().toISOString() })
-            .eq('id', delivery.order_id);
+        if (status === 'delivered') {
+          updates.actual_delivery_date = Timestamp.now();
         }
-      }
+
+        await FirestoreService.updateDocument(COLLECTIONS.DELIVERIES, deliveryId, updates);
+
+        // Add history
+        const historyId = `history_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        await FirestoreService.setDocument(COLLECTIONS.DELIVERY_STATUS_HISTORY, historyId, {
+          delivery_id: deliveryId,
+          status,
+          location,
+          notes,
+          updated_by: 'gigl_webhook',
+          created_at: Timestamp.now(),
+        });
+
+        // Update order if delivered
+        if (status === 'delivered') {
+          const delivery = await FirestoreService.getDocument(COLLECTIONS.DELIVERIES, deliveryId);
+          if (delivery) {
+            await FirestoreService.updateDocument(COLLECTIONS.ORDERS, (delivery as any).order_id, {
+              status: 'delivered',
+              delivered_at: Timestamp.now(),
+            });
+          }
+        }
+      });
 
       return { success: true };
     } catch (error) {
-      console.error('Failed to update delivery status:', error);
+      logger.error('Failed to update delivery status:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to update delivery status',
@@ -189,15 +195,17 @@ class DeliveryService {
     updatedBy: string = 'system'
   ): Promise<void> {
     try {
-      await supabase.from('delivery_status_history').insert({
+      const historyId = `history_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      await FirestoreService.setDocument(COLLECTIONS.DELIVERY_STATUS_HISTORY, historyId, {
         delivery_id: deliveryId,
         status,
         location,
         notes,
         updated_by: updatedBy,
+        created_at: Timestamp.now(),
       });
     } catch (error) {
-      console.error('Failed to add status history:', error);
+      logger.error('Failed to add status history:', error);
     }
   }
 
@@ -218,7 +226,7 @@ class DeliveryService {
         data: trackingResult.data,
       };
     } catch (error) {
-      console.error('Failed to get delivery tracking:', error);
+      logger.error('Failed to get delivery tracking:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to get tracking information',
@@ -233,60 +241,54 @@ class DeliveryService {
     signatureImageFile?: File
   ): Promise<{ success: boolean; error?: string }> {
     try {
-      const proofPath = `delivery-proofs/${deliveryId}/${Date.now()}-${proofImageFile.name}`;
-      const { error: uploadError } = await supabase.storage
-        .from('delivery-images')
-        .upload(proofPath, proofImageFile);
+      // Upload proof image
+      const { url: proofUrl, error: uploadError } = await FirebaseStorageService.uploadFile(
+        proofImageFile,
+        `delivery-proofs/${deliveryId}`,
+        `proof_${Date.now()}_${proofImageFile.name}`
+      );
 
-      if (uploadError) {
-        throw new Error(uploadError.message);
+      if (uploadError || !proofUrl) {
+        throw new Error(uploadError?.message || 'Failed to upload proof image');
       }
-
-      const { data: proofUrl } = supabase.storage
-        .from('delivery-images')
-        .getPublicUrl(proofPath);
 
       let signatureUrl: string | undefined;
       if (signatureImageFile) {
-        const signaturePath = `delivery-signatures/${deliveryId}/${Date.now()}-${signatureImageFile.name}`;
-        const { error: sigUploadError } = await supabase.storage
-          .from('delivery-images')
-          .upload(signaturePath, signatureImageFile);
+        const { url: sigUrl, error: sigError } = await FirebaseStorageService.uploadFile(
+          signatureImageFile,
+          `delivery-signatures/${deliveryId}`,
+          `signature_${Date.now()}_${signatureImageFile.name}`
+        );
 
-        if (!sigUploadError) {
-          const { data: sigUrl } = supabase.storage
-            .from('delivery-images')
-            .getPublicUrl(signaturePath);
-          signatureUrl = sigUrl.publicUrl;
+        if (sigUrl) {
+          signatureUrl = sigUrl;
         }
       }
 
-      const { error: updateError } = await supabase
-        .from('deliveries')
-        .update({
-          delivery_proof_url: proofUrl.publicUrl,
+      await FirestoreService.runTransaction(async (transaction) => {
+        // Update delivery
+        await FirestoreService.updateDocument(COLLECTIONS.DELIVERIES, deliveryId, {
+          delivery_proof_url: proofUrl,
           recipient_name: recipientName,
           recipient_signature_url: signatureUrl,
           delivery_status: 'delivered',
-          actual_delivery_date: new Date().toISOString(),
-        })
-        .eq('id', deliveryId);
+          actual_delivery_date: Timestamp.now(),
+        });
 
-      if (updateError) {
-        throw new Error(updateError.message);
-      }
-
-      await this.addStatusHistory(
-        deliveryId,
-        'delivered',
-        undefined,
-        `Delivered to ${recipientName}`,
-        'vendor'
-      );
+        // Add history
+        const historyId = `history_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        await FirestoreService.setDocument(COLLECTIONS.DELIVERY_STATUS_HISTORY, historyId, {
+          delivery_id: deliveryId,
+          status: 'delivered',
+          notes: `Delivered to ${recipientName}`,
+          updated_by: 'vendor',
+          created_at: Timestamp.now(),
+        });
+      });
 
       return { success: true };
     } catch (error) {
-      console.error('Failed to upload delivery proof:', error);
+      logger.error('Failed to upload delivery proof:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to upload delivery proof',
@@ -313,14 +315,17 @@ class DeliveryService {
       });
 
       if (!quoteResult.success || !quoteResult.data) {
-        const { data: zone } = await supabase
-          .from('delivery_zones')
-          .select('base_rate, per_kg_rate, express_multiplier')
-          .eq('state', deliveryState)
-          .eq('is_active', true)
-          .single();
+        // Fallback to local zones
+        const zones = await FirestoreService.getDocuments(COLLECTIONS.DELIVERY_ZONES, {
+          filters: [
+            { field: 'state', operator: '==', value: deliveryState },
+            { field: 'is_active', operator: '==', value: true }
+          ],
+          limitCount: 1
+        });
 
-        if (zone) {
+        if (zones.length > 0) {
+          const zone: any = zones[0];
           let cost = zone.base_rate + zone.per_kg_rate * weight;
           if (deliveryType === 'express') {
             cost *= zone.express_multiplier;
@@ -338,7 +343,7 @@ class DeliveryService {
         cost: quoteResult.data.estimatedCost,
       };
     } catch (error) {
-      console.error('Failed to calculate delivery cost:', error);
+      logger.error('Failed to calculate delivery cost:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to calculate delivery cost',

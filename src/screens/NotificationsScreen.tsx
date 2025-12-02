@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Bell, Package, MessageCircle, DollarSign, AlertCircle, CheckCircle } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { firestoreService, where, orderBy, limit } from '../services/firestoreService';
 
 interface Notification {
   id: string;
@@ -130,21 +130,19 @@ export const NotificationsScreen: React.FC = () => {
         <div className="mb-6 flex gap-2">
           <button
             onClick={() => setFilter('all')}
-            className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${
-              filter === 'all'
+            className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${filter === 'all'
                 ? 'bg-primary-500 text-white'
                 : 'bg-white text-neutral-700 hover:bg-neutral-50'
-            }`}
+              }`}
           >
             All
           </button>
           <button
             onClick={() => setFilter('unread')}
-            className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${
-              filter === 'unread'
+            className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${filter === 'unread'
                 ? 'bg-primary-500 text-white'
                 : 'bg-white text-neutral-700 hover:bg-neutral-50'
-            }`}
+              }`}
           >
             Unread {unreadCount > 0 && `(${unreadCount})`}
           </button>
@@ -169,9 +167,8 @@ export const NotificationsScreen: React.FC = () => {
             {filteredNotifications.map((notification) => (
               <Card
                 key={notification.id}
-                className={`cursor-pointer transition-all hover:shadow-md ${
-                  !notification.is_read ? 'bg-primary-50 border-primary-200' : ''
-                }`}
+                className={`cursor-pointer transition-all hover:shadow-md ${!notification.is_read ? 'bg-primary-50 border-primary-200' : ''
+                  }`}
                 onClick={() => {
                   if (!notification.is_read) {
                     markAsRead(notification.id);

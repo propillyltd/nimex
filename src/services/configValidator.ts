@@ -11,8 +11,12 @@ class ConfigValidator {
     'VITE_TWILIO_API_KEY',
     'VITE_TWILIO_API_SECRET',
     'VITE_TWILIO_PHONE_NUMBER',
-    'VITE_SUPABASE_URL',
-    'VITE_SUPABASE_ANON_KEY',
+    'VITE_FIREBASE_API_KEY',
+    'VITE_FIREBASE_AUTH_DOMAIN',
+    'VITE_FIREBASE_PROJECT_ID',
+    'VITE_FIREBASE_STORAGE_BUCKET',
+    'VITE_FIREBASE_MESSAGING_SENDER_ID',
+    'VITE_FIREBASE_APP_ID',
     'VITE_GOOGLE_MAPS_API_KEY',
   ];
 
@@ -35,14 +39,9 @@ class ConfigValidator {
       errors.push('VITE_TWILIO_PHONE_NUMBER must be in E.164 format (e.g., +1234567890)');
     }
 
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-    if (supabaseUrl && !supabaseUrl.match(/^https:\/\/[a-zA-Z0-9-]+\.supabase\.co$/)) {
-      errors.push('VITE_SUPABASE_URL must be a valid Supabase URL');
-    }
-
-    const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-    if (supabaseKey && supabaseKey.length < 100) {
-      errors.push('VITE_SUPABASE_ANON_KEY appears to be invalid (too short)');
+    const firebaseAuthDomain = import.meta.env.VITE_FIREBASE_AUTH_DOMAIN;
+    if (firebaseAuthDomain && !firebaseAuthDomain.includes('.firebaseapp.com')) {
+      errors.push('VITE_FIREBASE_AUTH_DOMAIN must be a valid Firebase Auth Domain');
     }
 
     return {

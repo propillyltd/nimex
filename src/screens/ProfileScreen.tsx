@@ -4,7 +4,6 @@ import { User, Mail, Phone, MapPin, Edit2, Save, Loader2 } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
 
 export const ProfileScreen: React.FC = () => {
   const { user, profile, updateProfile, loading } = useAuth();

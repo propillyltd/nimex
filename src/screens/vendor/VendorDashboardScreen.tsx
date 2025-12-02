@@ -13,14 +13,15 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
+import { COLLECTIONS } from '../../lib/collections';
 
 interface Order {
   id: string;
   order_number: string;
   total_amount: number;
   status: 'delivered' | 'shipped' | 'processing' | 'pending' | 'cancelled' | 'disputed';
-  created_at: string;
+  created_at: any; // Timestamp or string
 }
 
 interface Message {
@@ -61,66 +62,55 @@ export const VendorDashboardScreen: React.FC = () => {
     try {
       setLoading(true);
 
-      // Get vendor ID
-      const { data: vendor, error: vendorError } = await supabase
-        .from('vendors')
-        .select('id, wallet_balance')
-        .eq('user_id', user!.id)
-        .single();
+      if (!user) return;
 
-      if (vendorError) throw vendorError;
+      // Get vendor ID (assuming vendor ID is user ID)
+      const vendor = await FirestoreService.getDocument<any>(COLLECTIONS.VENDORS, user.uid);
+
       if (!vendor) return;
 
       // Fetch Orders
-      const { data: orders, error: ordersError } = await supabase
-        .from('orders')
-        .select('id, order_number, total_amount, status, created_at')
-        .eq('vendor_id', vendor.id)
-        .order('created_at', { ascending: false });
-
-      if (ordersError) throw ordersError;
+      const orders = await FirestoreService.getDocuments<Order>(COLLECTIONS.ORDERS, {
+        filters: [{ field: 'vendor_id', operator: '==', value: vendor.id || user.uid }],
+        orderByField: 'created_at',
+        orderByDirection: 'desc'
+      });
 
       // Fetch Products Count & Top Viewed
-      const { data: products, error: productsError } = await supabase
-        .from('products')
-        .select('id, title, views_count')
-        .eq('vendor_id', vendor.id)
-        .order('views_count', { ascending: false })
-        .limit(5);
+      const products = await FirestoreService.getDocuments<any>(COLLECTIONS.PRODUCTS, {
+        filters: [{ field: 'vendor_id', operator: '==', value: vendor.id || user.uid }],
+        orderByField: 'views_count',
+        orderByDirection: 'desc',
+        limitCount: 5
+      });
 
-      if (productsError) throw productsError;
-
-      const { count: productsCount, error: countError } = await supabase
-        .from('products')
-        .select('*', { count: 'exact', head: true })
-        .eq('vendor_id', vendor.id);
-
-      if (countError) throw countError;
+      const productsCount = await FirestoreService.getCount(COLLECTIONS.PRODUCTS, {
+        filters: [{ field: 'vendor_id', operator: '==', value: vendor.id || user.uid }]
+      });
 
       // Fetch Unread Messages
-      const { data: conversations, error: messagesError } = await supabase
-        .from('chat_conversations')
-        .select('id, last_message, unread_vendor')
-        .eq('vendor_id', vendor.id)
-        .gt('unread_vendor', 0)
-        .limit(3);
-
-      if (messagesError) throw messagesError;
+      const conversations = await FirestoreService.getDocuments<Message>(COLLECTIONS.CHAT_CONVERSATIONS, {
+        filters: [
+          { field: 'vendor_id', operator: '==', value: vendor.id || user.uid },
+          { field: 'unread_vendor', operator: '>', value: 0 }
+        ],
+        limitCount: 3
+      });
 
       // Process Data
-      const statusCounts = orders?.reduce((acc: any, order) => {
+      const statusCounts = orders.reduce((acc: any, order) => {
         acc[order.status] = (acc[order.status] || 0) + 1;
         return acc;
       }, {}) || {};
 
       setMetrics({
         earnings: vendor.wallet_balance || 0,
-        totalOrders: orders?.length || 0,
-        unreadMessages: conversations?.length || 0,
+        totalOrders: orders.length || 0,
+        unreadMessages: conversations.length || 0,
         totalProducts: productsCount || 0,
       });
 
-      setRecentOrders(orders?.slice(0, 5) || []);
+      setRecentOrders(orders.slice(0, 5) || []);
       setUnreadMessagesList(conversations || []);
       setTopProducts(products || []);
       setOrderStatusCounts(statusCounts);
@@ -323,7 +313,7 @@ export const VendorDashboardScreen: React.FC = () => {
                                 </span>
                               </td>
                               <td className="py-3 md:py-4 pr-4 md:pr-0 font-sans text-xs md:text-sm text-neutral-600">
-                                {new Date(order.created_at).toLocaleDateString()}
+                                {order.created_at?.toDate ? order.created_at.toDate().toLocaleDateString() : new Date(order.created_at).toLocaleDateString()}
                               </td>
                             </tr>
                           ))

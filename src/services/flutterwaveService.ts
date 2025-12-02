@@ -1,4 +1,6 @@
-import { supabase } from '../lib/supabase';
+import { FirestoreService } from './firestore.service';
+import { COLLECTIONS } from '../lib/collections';
+import { logger } from '../lib/logger';
 
 interface FlutterwaveWalletResponse {
   success: boolean;
@@ -57,18 +59,11 @@ class FlutterwaveService {
       const result = await response.json();
 
       if (result.status === 'success') {
-        const { data: updateData, error: updateError } = await supabase
-          .from('vendors')
-          .update({
-            flutterwave_wallet_id: result.data.order_ref,
-            flutterwave_account_number: result.data.account_number,
-            flutterwave_bank_name: result.data.bank_name,
-          })
-          .eq('id', vendorId);
-
-        if (updateError) {
-          console.error('Error updating vendor wallet info:', updateError);
-        }
+        await FirestoreService.updateDocument(COLLECTIONS.VENDORS, vendorId, {
+          flutterwave_wallet_id: result.data.order_ref,
+          flutterwave_account_number: result.data.account_number,
+          flutterwave_bank_name: result.data.bank_name,
+        });
 
         return {
           success: true,
@@ -86,7 +81,7 @@ class FlutterwaveService {
         error: result.message || 'Failed to create wallet',
       };
     } catch (error) {
-      console.error('Flutterwave wallet creation error:', error);
+      logger.error('Flutterwave wallet creation error:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -117,7 +112,7 @@ class FlutterwaveService {
         error: result.message || 'Failed to fetch balance',
       };
     } catch (error) {
-      console.error('Error fetching wallet balance:', error);
+      logger.error('Error fetching wallet balance:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -136,6 +131,9 @@ class FlutterwaveService {
     try {
       const reference = `NIMEX-PAYOUT-${vendorId}-${Date.now()}`;
 
+      // TODO: Update callback URL to Firebase Cloud Function
+      const callbackUrl = 'https://your-firebase-project.cloudfunctions.net/flutterwaveWebhook';
+
       const response = await fetch(`${this.apiUrl}/transfers`, {
         method: 'POST',
         headers: {
@@ -149,7 +147,7 @@ class FlutterwaveService {
           narration: narration,
           currency: 'NGN',
           reference: reference,
-          callback_url: `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/flutterwave-webhook`,
+          callback_url: callbackUrl,
           debit_currency: 'NGN',
         }),
       });
@@ -171,7 +169,7 @@ class FlutterwaveService {
         error: result.message || 'Transfer failed',
       };
     } catch (error) {
-      console.error('Transfer error:', error);
+      logger.error('Transfer error:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -202,7 +200,7 @@ class FlutterwaveService {
         error: result.message || 'Verification failed',
       };
     } catch (error) {
-      console.error('Transfer verification error:', error);
+      logger.error('Transfer verification error:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -233,7 +231,7 @@ class FlutterwaveService {
         error: result.message || 'Failed to fetch banks',
       };
     } catch (error) {
-      console.error('Error fetching bank list:', error);
+      logger.error('Error fetching bank list:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -270,7 +268,7 @@ class FlutterwaveService {
         error: result.message || 'Account resolution failed',
       };
     } catch (error) {
-      console.error('Account resolution error:', error);
+      logger.error('Account resolution error:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',

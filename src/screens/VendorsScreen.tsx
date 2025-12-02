@@ -10,7 +10,7 @@ import {
   Filter,
   X,
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { firestoreService, where, orderBy, limit } from '../services/firestoreService';
 import { logger } from '../lib/logger';
 import { TABLES, COLUMNS } from '../services/constants';
 import type { Database } from '../types/database';
@@ -45,16 +45,14 @@ export const VendorsScreen: React.FC = () => {
 
   const loadMarkets = async () => {
     try {
-      const { data, error } = await supabase
-        .from('markets')
-        .select('*')
-        .eq('is_active', true)
-        .gt('vendor_count', 0)
-        .order('vendor_count', { ascending: false })
-        .limit(20);
+      const markets = await firestoreService.getDocuments<Market>('markets', [
+        where('is_active', '==', true),
+        where('vendor_count', '>', 0),
+        orderBy('vendor_count', 'desc'),
+        limit(20)
+      ]);
 
-      if (error) throw error;
-      setMarkets(data || []);
+      setMarkets(markets);
     } catch (error) {
       logger.error('Error loading markets', error);
     }
@@ -326,9 +324,8 @@ export const VendorsScreen: React.FC = () => {
                       <button
                         key={market.id}
                         onClick={() => handleMarketSelect(market.id)}
-                        className={`w-full px-3 py-2 text-left rounded-lg hover:bg-neutral-50 transition-colors ${
-                          selectedMarket === market.id ? 'bg-primary-50 border-l-4 border-primary-500' : ''
-                        }`}
+                        className={`w-full px-3 py-2 text-left rounded-lg hover:bg-neutral-50 transition-colors ${selectedMarket === market.id ? 'bg-primary-50 border-l-4 border-primary-500' : ''
+                          }`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1">
@@ -438,11 +435,10 @@ export const VendorsScreen: React.FC = () => {
                         {[...Array(5)].map((_, i) => (
                           <Star
                             key={i}
-                            className={`w-4 h-4 ${
-                              i < Math.floor(vendor.rating)
-                                ? 'fill-accent-yellow text-accent-yellow'
-                                : 'text-neutral-300'
-                            }`}
+                            className={`w-4 h-4 ${i < Math.floor(vendor.rating)
+                              ? 'fill-accent-yellow text-accent-yellow'
+                              : 'text-neutral-300'
+                              }`}
                           />
                         ))}
                       </div>

@@ -13,7 +13,7 @@ import {
   MapPin,
   CheckCircle,
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { firestoreService, where, orderBy, limit } from '../services/firestoreService';
 import { logger } from '../lib/logger';
 import { TABLES, COLUMNS } from '../services/constants';
 import type { Database } from '../types/database';
@@ -49,60 +49,55 @@ export const VendorProfileScreen: React.FC = () => {
       setError(null);
       logger.info(`Loading vendor profile for ID: ${vendorId}`);
 
-      // Fetch vendor with profile and reviews
-      const { data: vendorData, error: vendorError } = await (supabase
-        .from(TABLES.VENDORS) as any)
-        .select(`
-          *,
-          profiles:user_id (
-            id,
-            email,
-            full_name
-          )
-        `)
-        .eq(COLUMNS.VENDORS.ID, vendorId)
-        .eq(COLUMNS.VENDORS.IS_ACTIVE, true)
-        .not(COLUMNS.VENDORS.BUSINESS_NAME, 'is', null)
-        .neq(COLUMNS.VENDORS.BUSINESS_NAME, '')
-        .single();
-
-      if (vendorError) {
-        logger.error('Error fetching vendor', vendorError);
-        setError('Vendor not found or unavailable');
-        return;
-      }
+      // Fetch vendor from Firestore
+      const vendorData = await firestoreService.getDocument<any>('vendors', vendorId);
 
       if (!vendorData) {
         setError('Vendor not found');
         return;
       }
 
+      // Check if vendor is active and has business name
+      if (!vendorData.is_active || !vendorData.business_name || vendorData.business_name.trim() === '') {
+        setError('Vendor not found or unavailable');
+        return;
+      }
+
+      // Fetch profile data
+      let profileData = null;
+      if (vendorData.user_id) {
+        profileData = await firestoreService.getDocument('profiles', vendorData.user_id);
+      }
+
       // Fetch recent reviews
-      const { data: reviewsData } = await supabase
-        .from('reviews')
-        .select(`
-          id,
-          rating,
-          review_text,
-          created_at,
-          profiles:buyer_id (
-            full_name
-          )
-        `)
-        .eq('vendor_id', vendorId)
-        .order('created_at', { ascending: false })
-        .limit(10);
+      const reviewsData = await firestoreService.getDocuments('reviews', [
+        where('vendor_id', '==', vendorId),
+        orderBy('created_at', 'desc'),
+        limit(10)
+      ]);
+
+      // Fetch buyer profiles for reviews
+      const reviewsWithProfiles = await Promise.all(
+        reviewsData.map(async (review: any) => {
+          let buyerProfile = null;
+          if (review.buyer_id) {
+            buyerProfile = await firestoreService.getDocument('profiles', review.buyer_id);
+          }
+          return {
+            id: review.id,
+            customer_name: buyerProfile?.full_name || 'Anonymous',
+            rating: review.rating,
+            comment: review.review_text || '',
+            created_at: review.created_at
+          };
+        })
+      );
 
       const vendorWithReviews: VendorWithProfile = {
         ...vendorData,
-        review_count: reviewsData?.length || 0,
-        reviews: reviewsData?.map(review => ({
-          id: review.id,
-          customer_name: (review as any).profiles?.full_name || 'Anonymous',
-          rating: review.rating,
-          comment: review.review_text || '',
-          created_at: review.created_at
-        })) || []
+        profile: profileData,
+        review_count: reviewsData.length,
+        reviews: reviewsWithProfiles
       };
 
       setVendor(vendorWithReviews);

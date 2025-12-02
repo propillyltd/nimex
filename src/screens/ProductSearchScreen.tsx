@@ -4,7 +4,7 @@ import { SearchIcon, SlidersHorizontal, XIcon, MapPin, TrendingUp, Award } from 
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
-import { supabase } from '../lib/supabase';
+import { firestoreService, where, orderBy, limit } from '../services/firestoreService';
 import { googleMapsService, type PlaceResult } from '../services/googleMapsService';
 import { recommendationService } from '../services/recommendationService';
 import { useAuth } from '../contexts/AuthContext';
@@ -56,45 +56,56 @@ export const ProductSearchScreen: React.FC = () => {
   const fetchProducts = async () => {
     setLoading(true);
     try {
-      let queryBuilder = supabase
-        .from('products')
-        .select('*')
-        .eq('status', 'active');
+      // Build Firestore query constraints
+      const constraints: any[] = [
+        where('status', '==', 'active')
+      ];
 
-      if (query) {
-        queryBuilder = queryBuilder.or(`title.ilike.%${query}%,description.ilike.%${query}%`);
-      }
-
+      // Add category filter
       if (category) {
-        queryBuilder = queryBuilder.eq('category_id', category);
+        constraints.push(where('category_id', '==', category));
       }
 
+      // Add price filters
       if (minPrice) {
-        queryBuilder = queryBuilder.gte('price', parseFloat(minPrice));
+        constraints.push(where('price', '>=', parseFloat(minPrice)));
       }
-
       if (maxPrice) {
-        queryBuilder = queryBuilder.lte('price', parseFloat(maxPrice));
+        constraints.push(where('price', '<=', parseFloat(maxPrice)));
       }
 
-      if (location) {
-        queryBuilder = queryBuilder.ilike('location', `%${location}%`);
-      }
-
+      // Add sorting
       if (sortBy === 'price_low') {
-        queryBuilder = queryBuilder.order('price', { ascending: true });
+        constraints.push(orderBy('price', 'asc'));
       } else if (sortBy === 'price_high') {
-        queryBuilder = queryBuilder.order('price', { ascending: false });
+        constraints.push(orderBy('price', 'desc'));
       } else if (sortBy === 'newest') {
-        queryBuilder = queryBuilder.order('created_at', { ascending: false });
+        constraints.push(orderBy('created_at', 'desc'));
       } else if (sortBy === 'rating') {
-        queryBuilder = queryBuilder.order('rating', { ascending: false });
+        constraints.push(orderBy('rating', 'desc'));
       }
 
-      const { data, error } = await queryBuilder;
+      // Fetch products from Firestore
+      let fetchedProducts = await firestoreService.getDocuments<Product>('products', constraints);
 
-      if (error) throw error;
-      setProducts(data || []);
+      // Client-side text search (Firestore doesn't support ILIKE)
+      if (query) {
+        const searchLower = query.toLowerCase();
+        fetchedProducts = fetchedProducts.filter(product =>
+          product.title?.toLowerCase().includes(searchLower) ||
+          product.description?.toLowerCase().includes(searchLower)
+        );
+      }
+
+      // Client-side location filter (Firestore doesn't support ILIKE)
+      if (location) {
+        const locationLower = location.toLowerCase();
+        fetchedProducts = fetchedProducts.filter(product =>
+          product.location?.toLowerCase().includes(locationLower)
+        );
+      }
+
+      setProducts(fetchedProducts);
     } catch (error) {
       console.error('Error fetching products:', error);
     } finally {
