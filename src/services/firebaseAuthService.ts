@@ -9,8 +9,9 @@ import {
     UserCredential,
 } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { auth, db } from './firebase';
-import { logger } from './logger';
+import { auth, db } from '../lib/firebase';
+import { logger } from '../lib/logger';
+
 
 export interface UserProfile {
     id: string;
