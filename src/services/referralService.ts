@@ -250,6 +250,7 @@ class ReferralService {
     phone: string;
     businessName?: string;
     bankAccountDetails?: any;
+    userId?: string;
   }): Promise<{ success: boolean; error?: string; marketerId?: string }> {
     try {
       // Check if marketer with this email already exists
@@ -273,6 +274,7 @@ class ReferralService {
         business_name: data.businessName || null,
         bank_account_details: data.bankAccountDetails || null,
         status: 'pending',
+        user_id: data.userId || null,
         created_at: Timestamp.now(),
         updated_at: Timestamp.now()
       });

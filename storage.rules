@@ -23,10 +23,21 @@ service firebase.storage {
       return request.resource.contentType.matches('image/.*');
     }
     
-    // Product images - public read, authenticated write
+    function isValidVideoSize() {
+      return request.resource.size < 50 * 1024 * 1024; // 50MB
+    }
+
+    function isVideoFile() {
+      return request.resource.contentType.matches('video/.*');
+    }
+
+    // Product media (images and videos) - public read, authenticated write
     match /products/{productId}/{fileName} {
       allow read: if true;
-      allow write: if isAuthenticated() && isValidImageSize() && isImageFile();
+      allow write: if isAuthenticated() && (
+        (isImageFile() && isValidImageSize()) || 
+        (isVideoFile() && isValidVideoSize())
+      );
     }
     
     // User avatars - authenticated read, owner write

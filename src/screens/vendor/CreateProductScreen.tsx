@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { ArrowLeft, Save, Loader2, Upload, X } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, Upload, X, Video } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { storage } from '../../lib/firebase.config';
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { useAuth } from '../../contexts/AuthContext';
 import { ProductTagsInput } from '../../components/vendor/ProductTagsInput';
 
@@ -31,6 +33,9 @@ export const CreateProductScreen: React.FC = () => {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [isUploading, setIsUploading] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -40,6 +45,7 @@ export const CreateProductScreen: React.FC = () => {
     stock_quantity: '',
     category_id: '',
     image_url: '',
+    video_url: '',
     tags: [] as string[],
   });
 
@@ -89,6 +95,7 @@ export const CreateProductScreen: React.FC = () => {
           stock_quantity: product.stock_quantity.toString(),
           category_id: product.category_id || '',
           image_url: typeof product.images === 'string' ? product.images : (product.images as any)?.url || '', // Handle JSON or string
+          video_url: product.video_url || '',
           tags: product.product_tags?.map((pt: any) => pt.tag) || [],
         });
 
@@ -106,6 +113,25 @@ export const CreateProductScreen: React.FC = () => {
   const handleImageUrlChange = (url: string) => {
     setFormData({ ...formData, image_url: url });
     setImagePreview(url);
+  };
+
+  const handleVideoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      // Check file size (50MB limit)
+      if (file.size > 50 * 1024 * 1024) {
+        setError('Video file size must be less than 50MB');
+        return;
+      }
+      // Check file type
+      if (!file.type.startsWith('video/')) {
+        setError('Please select a valid video file');
+        return;
+      }
+      setVideoFile(file);
+      // Clear any previous error
+      setError('');
+    }
   };
 
   const handleTagToggle = (tagId: string) => {
@@ -136,6 +162,42 @@ export const CreateProductScreen: React.FC = () => {
       if (vendorError) throw vendorError;
       if (!vendor) throw new Error('Vendor profile not found');
 
+      let finalVideoUrl = formData.video_url;
+
+      if (videoFile) {
+        setIsUploading(true);
+        try {
+          // Generate a storage path ID (use existing ID if editing, or random if new)
+          const storageId = id || `new_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          const fileExt = videoFile.name.split('.').pop();
+          const fileName = `video_${Date.now()}.${fileExt}`;
+          const storageRef = ref(storage, `products/${storageId}/${fileName}`);
+
+          const uploadTask = uploadBytesResumable(storageRef, videoFile);
+
+          await new Promise<void>((resolve, reject) => {
+            uploadTask.on('state_changed',
+              (snapshot) => {
+                const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                setUploadProgress(progress);
+              },
+              (error) => {
+                reject(error);
+              },
+              async () => {
+                finalVideoUrl = await getDownloadURL(uploadTask.snapshot.ref);
+                resolve();
+              }
+            );
+          });
+
+          setIsUploading(false);
+        } catch (err) {
+          console.error('Video upload failed:', err);
+          throw new Error('Failed to upload video. Please try again.');
+        }
+      }
+
       let product;
 
       const productData = {
@@ -148,6 +210,7 @@ export const CreateProductScreen: React.FC = () => {
         category_id: formData.category_id || null,
         images: formData.image_url, // Storing as string for now, or object if needed
         image_url: formData.image_url, // Keep for compatibility
+        video_url: finalVideoUrl || null,
       };
 
       if (isEditing && id) {
@@ -395,6 +458,72 @@ export const CreateProductScreen: React.FC = () => {
 
                 <div>
                   <label className="block font-sans font-medium text-xs md:text-sm text-neutral-700 mb-1 md:mb-2">
+                    Product Video <span className="text-neutral-400 font-normal">(Max 50MB)</span>
+                  </label>
+
+                  {!videoFile && !formData.video_url ? (
+                    <div className="border-2 border-dashed border-neutral-200 rounded-lg p-6 flex flex-col items-center justify-center text-center hover:bg-neutral-50 transition-colors cursor-pointer relative">
+                      <input
+                        type="file"
+                        accept="video/*"
+                        onChange={handleVideoFileChange}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      />
+                      <div className="w-10 h-10 bg-primary-50 text-primary-600 rounded-full flex items-center justify-center mb-2">
+                        <Video className="w-5 h-5" />
+                      </div>
+                      <p className="font-sans font-medium text-sm text-neutral-900">
+                        Click to upload video
+                      </p>
+                      <p className="font-sans text-xs text-neutral-500 mt-1">
+                        MP4, WebM or Ogg (Max 50MB)
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between p-3 border border-neutral-200 rounded-lg bg-neutral-50">
+                      <div className="flex items-center gap-3 overflow-hidden">
+                        <div className="w-10 h-10 bg-primary-100 text-primary-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                          <Video className="w-5 h-5" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-sans font-medium text-sm text-neutral-900 truncate">
+                            {videoFile ? videoFile.name : 'Existing Video'}
+                          </p>
+                          <p className="font-sans text-xs text-neutral-500">
+                            {videoFile ? `${(videoFile.size / (1024 * 1024)).toFixed(2)} MB` : 'Uploaded'}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVideoFile(null);
+                          setFormData({ ...formData, video_url: '' });
+                        }}
+                        className="p-2 text-neutral-400 hover:text-red-500 transition-colors"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                  )}
+
+                  {isUploading && (
+                    <div className="mt-2">
+                      <div className="h-1.5 w-full bg-neutral-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-primary-500 transition-all duration-300"
+                          style={{ width: `${uploadProgress}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-neutral-500 mt-1 text-right">
+                        Uploading: {Math.round(uploadProgress)}%
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block font-sans font-medium text-xs md:text-sm text-neutral-700 mb-1 md:mb-2">
                     Product Tags
                   </label>
                   <div className="flex flex-wrap gap-2 mb-3">
@@ -404,8 +533,8 @@ export const CreateProductScreen: React.FC = () => {
                         type="button"
                         onClick={() => handleTagToggle(tag.id)}
                         className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${formData.tags.includes(tag.id)
-                            ? 'bg-primary-50 border-primary-200 text-primary-700'
-                            : 'bg-white border-neutral-200 text-neutral-600 hover:border-neutral-300'
+                          ? 'bg-primary-50 border-primary-200 text-primary-700'
+                          : 'bg-white border-neutral-200 text-neutral-600 hover:border-neutral-300'
                           }`}
                       >
                         {tag.label}

@@ -23,6 +23,7 @@ interface ProductDetail {
   rating: number;
   views_count: number;
   vendor_id: string;
+  video_url?: string;
 }
 
 interface Vendor {
@@ -250,6 +251,24 @@ export const ProductDetailScreen: React.FC = () => {
                     />
                   </button>
                 ))}
+              </div>
+            )}
+
+            {product.video_url && (
+              <div className="mt-4">
+                <h3 className="font-heading font-semibold text-lg text-neutral-900 mb-2">
+                  Product Video
+                </h3>
+                <div className="aspect-video rounded-lg overflow-hidden bg-neutral-900">
+                  <iframe
+                    src={product.video_url.replace('watch?v=', 'embed/').replace('vimeo.com/', 'player.vimeo.com/video/')}
+                    title="Product Video"
+                    className="w-full h-full"
+                    frameBorder="0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                  />
+                </div>
               </div>
             )}
           </div>

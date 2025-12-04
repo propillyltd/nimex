@@ -45,6 +45,10 @@ export interface QueryFilter {
  */
 export interface QueryOptions {
     filters?: QueryFilter[];
+    orderBy?: {
+        field: string;
+        direction?: OrderByDirection;
+    };
     orderByField?: string;
     orderByDirection?: OrderByDirection;
     limitCount?: number;
@@ -93,10 +97,17 @@ export class FirestoreService {
                 });
             }
 
-            // Add ordering
+            // Add ordering (legacy)
             if (options?.orderByField) {
                 constraints.push(
                     orderBy(options.orderByField, options.orderByDirection || 'asc')
+                );
+            }
+
+            // Add ordering (new object style)
+            if (options?.orderBy) {
+                constraints.push(
+                    orderBy(options.orderBy.field, options.orderBy.direction || 'asc')
                 );
             }
 

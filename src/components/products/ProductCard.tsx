@@ -20,6 +20,7 @@ export interface Product {
     inStock: boolean;
     discount?: number;
     tags?: string[]; // 'new', 'hot', 'urgent', etc.
+    video_url?: string;
 }
 
 interface ProductCardProps {
@@ -53,8 +54,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                     <Star
                         key={i}
                         className={`w-3.5 h-3.5 ${i < Math.floor(rating)
-                                ? 'text-yellow-400 fill-yellow-400'
-                                : 'text-neutral-300'
+                            ? 'text-yellow-400 fill-yellow-400'
+                            : 'text-neutral-300'
                             }`}
                     />
                 ))}
@@ -96,6 +97,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                     {product.tags?.includes('urgent') && (
                         <Badge className="bg-red-600 text-white font-sans font-semibold shadow-sm animate-pulse">
                             URGENT
+                        </Badge>
+                    )}
+                    {product.video_url && (
+                        <Badge className="bg-neutral-900/80 text-white font-sans font-semibold shadow-sm backdrop-blur-sm">
+                            VIDEO
                         </Badge>
                     )}
                 </div>

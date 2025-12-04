@@ -1,32 +1,86 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { PackageIcon, TrendingUp, DollarSign, Users, CheckCircle, Megaphone } from 'lucide-react';
+import { PackageIcon, TrendingUp, DollarSign, Users, CheckCircle, Megaphone, Eye, EyeOff } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { referralService } from '../services/referralService';
+import { useAuth } from '../contexts/AuthContext';
 
 export const MarketerRegistrationScreen: React.FC = () => {
   const navigate = useNavigate();
+  const { signUp } = useAuth();
   const [formData, setFormData] = useState({
     fullName: '',
     email: '',
     phone: '',
     businessName: '',
+    password: '',
+    confirmPassword: '',
   });
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    if (formData.password !== formData.confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+
+    if (formData.password.length < 6) {
+      setError('Password must be at least 6 characters');
+      return;
+    }
+
     setLoading(true);
 
     try {
-      const result = await referralService.registerMarketer(formData);
+      // 1. Create Auth Account
+      const { error: authError } = await signUp({
+        email: formData.email,
+        password: formData.password,
+        fullName: formData.fullName,
+        role: 'marketer'
+      });
+
+      if (authError) {
+        throw new Error(authError.message);
+      }
+
+      // Get the user ID from the auth context (it might take a moment to update, 
+      // but FirebaseAuthService.signUp returns the user object if we used it directly.
+      // Since we used useAuth().signUp which returns { error }, we rely on the fact 
+      // that the user is created. 
+      // Ideally, we should get the UID. 
+      // Let's assume for now we can proceed with the registration using the email 
+      // to link, or we should have modified useAuth to return the user.
+      // However, since we just signed up, the user is logged in.
+      // We can get the current user from the auth service directly if needed, 
+      // or just pass the email which is unique.
+
+      // Actually, let's use the FirebaseAuthService directly to get the UID if needed,
+      // but useAuth handles the state update.
+      // For the referral service, we'll pass the email and let it handle it, 
+      // but we updated it to take userId.
+      // We can get the currentUser from the firebase auth instance.
+      const { auth } = await import('../lib/firebase.config');
+      const userId = auth.currentUser?.uid;
+
+      // 2. Create Marketer Profile
+      const result = await referralService.registerMarketer({
+        fullName: formData.fullName,
+        email: formData.email,
+        phone: formData.phone,
+        businessName: formData.businessName,
+        userId: userId
+      });
 
       if (result.success) {
-        setSuccess(true);
+        // Redirect to dashboard immediately
+        navigate('/marketer/dashboard');
       } else {
         setError(result.error || 'Registration failed. Please try again.');
       }
@@ -37,42 +91,6 @@ export const MarketerRegistrationScreen: React.FC = () => {
       setLoading(false);
     }
   };
-
-  if (success) {
-    return (
-      <div className="min-h-screen bg-white flex flex-col">
-        <div className="p-6 md:p-8 border-b border-neutral-200">
-          <Link to="/" className="inline-flex items-center gap-2">
-            <div className="w-10 h-10 bg-primary-500 rounded-md flex items-center justify-center">
-              <PackageIcon className="w-6 h-6 text-white" />
-            </div>
-            <span className="font-heading font-bold text-primary-500 text-2xl">NIMEX</span>
-          </Link>
-        </div>
-
-        <div className="flex-1 flex flex-col justify-center items-center px-6 py-12">
-          <div className="max-w-md w-full text-center">
-            <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
-              <CheckCircle className="w-12 h-12 text-green-600" />
-            </div>
-            <h1 className="font-heading font-bold text-3xl text-neutral-900 mb-4">
-              Registration Submitted!
-            </h1>
-            <p className="font-sans text-neutral-600 mb-8 leading-relaxed">
-              Thank you for registering as a marketer. Your application has been submitted and is pending
-              admin approval. You will receive an email with your unique referral code once approved.
-            </p>
-            <Button
-              onClick={() => navigate('/')}
-              className="bg-primary-500 hover:bg-primary-600 text-white px-8"
-            >
-              Return to Home
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-neutral-50">
@@ -172,7 +190,7 @@ export const MarketerRegistrationScreen: React.FC = () => {
                   Register as a Marketer
                 </h2>
                 <p className="font-sans text-neutral-600 mb-6">
-                  Fill in your details to get started
+                  Create your account to get started
                 </p>
 
                 {error && (
@@ -241,12 +259,52 @@ export const MarketerRegistrationScreen: React.FC = () => {
                     />
                   </div>
 
+                  <div>
+                    <label htmlFor="password" className="block font-sans font-medium text-neutral-700 mb-2">
+                      Password <span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="password"
+                        type={showPassword ? 'text' : 'password'}
+                        value={formData.password}
+                        onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                        required
+                        minLength={6}
+                        className="w-full h-12 px-4 pr-12 rounded-lg border border-neutral-200 font-sans text-neutral-900 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                        placeholder="At least 6 characters"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600"
+                      >
+                        {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label htmlFor="confirmPassword" className="block font-sans font-medium text-neutral-700 mb-2">
+                      Confirm Password <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      id="confirmPassword"
+                      type="password"
+                      value={formData.confirmPassword}
+                      onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                      required
+                      className="w-full h-12 px-4 rounded-lg border border-neutral-200 font-sans text-neutral-900 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      placeholder="Re-enter your password"
+                    />
+                  </div>
+
                   <Button
                     type="submit"
                     disabled={loading}
                     className="w-full h-12 bg-primary-500 hover:bg-primary-600 text-white font-sans font-semibold rounded-lg"
                   >
-                    {loading ? 'Submitting...' : 'Register as Marketer'}
+                    {loading ? 'Creating Account...' : 'Register as Marketer'}
                   </Button>
                 </form>
 

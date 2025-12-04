@@ -13,7 +13,8 @@ import {
     Eye,
     BarChart3
 } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
+import { COLLECTIONS } from '../../lib/collections';
 import { useAuth } from '../../contexts/AuthContext';
 import { referralService } from '../../services/referralService';
 import { logger } from '../../lib/logger';
@@ -76,51 +77,61 @@ export const MarketerDashboardScreen: React.FC = () => {
             setLoading(true);
 
             // Get marketer info
-            const { data: marketer, error: marketerError } = await supabase
-                .from('marketers')
-                .select('*')
-                .eq('email', user?.email)
-                .single();
+            const marketers = await FirestoreService.getDocuments<MarketerInfo>(
+                COLLECTIONS.MARKETERS,
+                {
+                    filters: [{ field: 'email', operator: '==', value: user?.email }],
+                    limitCount: 1
+                }
+            );
 
-            if (marketerError) throw marketerError;
-
-            if (!marketer) {
+            if (!marketers || marketers.length === 0) {
                 logger.error('Marketer not found');
                 return;
             }
 
+            const marketer = marketers[0];
             setMarketerInfo(marketer);
 
             // Get referrals
-            const { data: referralsData, error: referralsError } = await supabase
-                .from('marketer_referrals')
-                .select(`
-          id,
-          status,
-          commission_amount,
-          commission_paid,
-          commission_paid_at,
-          created_at,
-          vendors!inner(
-            business_name,
-            user_id
-          )
-        `)
-                .eq('marketer_id', marketer.id)
-                .order('created_at', { ascending: false });
+            const referralsData = await FirestoreService.getDocuments<any>(
+                'marketer_referrals',
+                {
+                    filters: [{ field: 'marketer_id', operator: '==', value: marketer.id }],
+                    orderBy: { field: 'created_at', direction: 'desc' }
+                }
+            );
 
-            if (referralsError) throw referralsError;
+
 
             // Transform referrals data
-            const transformedReferrals: Referral[] = (referralsData || []).map((ref: any) => ({
-                id: ref.id,
-                vendor_name: ref.vendors?.business_name || 'Unknown Vendor',
-                vendor_email: ref.vendors?.user_id || '',
-                status: ref.status,
-                commission_amount: ref.commission_amount,
-                commission_paid: ref.commission_paid,
-                created_at: ref.created_at,
-                commission_paid_at: ref.commission_paid_at,
+            const transformedReferrals: Referral[] = await Promise.all((referralsData || []).map(async (ref: any) => {
+                // Fetch vendor details for each referral manually since Firestore doesn't support joins
+                let vendorName = 'Unknown Vendor';
+                let vendorEmail = '';
+
+                if (ref.vendor_id) {
+                    try {
+                        const vendor = await FirestoreService.getDocument<any>(COLLECTIONS.VENDORS, ref.vendor_id);
+                        if (vendor) {
+                            vendorName = vendor.business_name || 'Unknown Vendor';
+                            vendorEmail = vendor.user_id || '';
+                        }
+                    } catch (e) {
+                        logger.warn(`Failed to fetch vendor details for referral ${ref.id}`, e);
+                    }
+                }
+
+                return {
+                    id: ref.id,
+                    vendor_name: vendorName,
+                    vendor_email: vendorEmail,
+                    status: ref.status,
+                    commission_amount: ref.commission_amount,
+                    commission_paid: ref.commission_paid,
+                    created_at: ref.created_at?.toDate ? ref.created_at.toDate().toISOString() : new Date().toISOString(),
+                    commission_paid_at: ref.commission_paid_at?.toDate ? ref.commission_paid_at.toDate().toISOString() : null,
+                };
             }));
 
             setReferrals(transformedReferrals);
@@ -272,8 +283,8 @@ export const MarketerDashboardScreen: React.FC = () => {
                             <Button
                                 onClick={handleCopyReferralLink}
                                 className={`${copiedLink
-                                        ? 'bg-green-600 hover:bg-green-700'
-                                        : 'bg-primary-600 hover:bg-primary-700'
+                                    ? 'bg-green-600 hover:bg-green-700'
+                                    : 'bg-primary-600 hover:bg-primary-700'
                                     } text-white`}
                             >
                                 {copiedLink ? (

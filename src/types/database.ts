@@ -6,7 +6,7 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
-export type UserRole = 'buyer' | 'vendor' | 'admin';
+export type UserRole = 'buyer' | 'vendor' | 'admin' | 'marketer';
 export type VerificationStatus = 'pending' | 'verified' | 'rejected';
 export type KYCStatus = 'pending' | 'approved' | 'rejected' | 'resubmit';
 export type VerificationBadge = 'none' | 'basic' | 'verified' | 'premium';
@@ -167,6 +167,7 @@ export interface Database {
           favorites_count: number;
           rating: number;
           is_featured: boolean;
+          video_url: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -186,6 +187,7 @@ export interface Database {
           favorites_count?: number;
           rating?: number;
           is_featured?: boolean;
+          video_url?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -205,6 +207,7 @@ export interface Database {
           favorites_count?: number;
           rating?: number;
           is_featured?: boolean;
+          video_url?: string | null;
           created_at?: string;
           updated_at?: string;
         };
