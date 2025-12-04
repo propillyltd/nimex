@@ -127,7 +127,7 @@ service cloud.firestore {
     // Marketers - admin and owner
     match /marketers/{marketerId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
+      allow create: if true; // Allow unauthenticated marketer registration
       allow update, delete: if isAuthenticated() && 
         (resource.data.user_id == request.auth.uid || isAdmin());
     }
