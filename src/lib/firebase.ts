@@ -1,12 +1,23 @@
-import { initializeApp } from 'firebase/app';
-import { getAuth, connectAuthEmulator } from 'firebase/auth';
-import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
-import { getStorage, connectStorageEmulator } from 'firebase/storage';
+import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
+import { getAuth, connectAuthEmulator, Auth } from 'firebase/auth';
+import { getFirestore, connectFirestoreEmulator, Firestore } from 'firebase/firestore';
+import { getStorage, connectStorageEmulator, FirebaseStorage } from 'firebase/storage';
 import { getAnalytics, Analytics } from 'firebase/analytics';
 import { logger } from './logger';
 
+// Firebase configuration interface
+export interface FirebaseConfig {
+    apiKey: string;
+    authDomain: string;
+    projectId: string;
+    storageBucket: string;
+    messagingSenderId: string;
+    appId: string;
+    measurementId?: string;
+}
+
 // Firebase configuration from environment variables
-const firebaseConfig = {
+const firebaseConfig: FirebaseConfig = {
     apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
     authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
     projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
@@ -28,16 +39,24 @@ const validateConfig = () => {
 };
 
 // Initialize Firebase
-let app;
-let auth;
-let db;
-let storage;
+let app: FirebaseApp;
+let auth: Auth;
+let db: Firestore;
+let storage: FirebaseStorage;
 let analytics: Analytics | null = null;
 
 try {
     validateConfig();
 
-    app = initializeApp(firebaseConfig);
+    // Check if app is already initialized to avoid duplicate app errors
+    if (getApps().length === 0) {
+        app = initializeApp(firebaseConfig);
+        logger.info('Firebase initialized successfully');
+    } else {
+        app = getApp();
+        logger.info('Firebase app already initialized, using existing instance');
+    }
+
     auth = getAuth(app);
     db = getFirestore(app);
     storage = getStorage(app);
@@ -49,13 +68,20 @@ try {
 
     // Connect to emulators in development
     if (import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATOR === 'true') {
-        connectAuthEmulator(auth, 'http://localhost:9099');
-        connectFirestoreEmulator(db, 'localhost', 8080);
-        connectStorageEmulator(storage, 'localhost', 9199);
-        logger.info('Connected to Firebase emulators');
+        // Only connect if not already connected (naive check, but emulators usually set up once)
+        // Note: Firebase SDK warns if you try to connect twice, but it's generally safe.
+        // For strictness we could check a global flag.
+        try {
+            connectAuthEmulator(auth, 'http://localhost:9099');
+            connectFirestoreEmulator(db, 'localhost', 8080);
+            connectStorageEmulator(storage, 'localhost', 9199);
+            logger.info('Connected to Firebase emulators');
+        } catch (e) {
+            // Ignore errors if already connected
+            logger.warn('Failed to connect to emulators (might be already connected)', e);
+        }
     }
 
-    logger.info('Firebase initialized successfully');
 } catch (error) {
     logger.error('Error initializing Firebase:', error);
     throw error;

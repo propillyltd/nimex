@@ -13,7 +13,8 @@ import {
   MapPin,
   CheckCircle,
 } from 'lucide-react';
-import { firestoreService, where, orderBy, limit } from '../services/firestoreService';
+import { FirestoreService } from '../services/firestore.service';
+import { COLLECTIONS } from '../lib/collections';
 import { logger } from '../lib/logger';
 import { TABLES, COLUMNS } from '../services/constants';
 import type { Database } from '../types/database';
@@ -50,7 +51,7 @@ export const VendorProfileScreen: React.FC = () => {
       logger.info(`Loading vendor profile for ID: ${vendorId}`);
 
       // Fetch vendor from Firestore
-      const vendorData = await firestoreService.getDocument<any>('vendors', vendorId);
+      const vendorData = await FirestoreService.getDocument<any>(COLLECTIONS.VENDORS, vendorId);
 
       if (!vendorData) {
         setError('Vendor not found');
@@ -66,22 +67,22 @@ export const VendorProfileScreen: React.FC = () => {
       // Fetch profile data
       let profileData = null;
       if (vendorData.user_id) {
-        profileData = await firestoreService.getDocument('profiles', vendorData.user_id);
+        profileData = await FirestoreService.getDocument<any>(COLLECTIONS.PROFILES, vendorData.user_id);
       }
 
       // Fetch recent reviews
-      const reviewsData = await firestoreService.getDocuments('reviews', [
-        where('vendor_id', '==', vendorId),
-        orderBy('created_at', 'desc'),
-        limit(10)
-      ]);
+      const reviewsData = await FirestoreService.getDocuments<any>(COLLECTIONS.REVIEWS, {
+        filters: [{ field: 'vendor_id', operator: '==', value: vendorId }],
+        orderBy: { field: 'created_at', direction: 'desc' },
+        limitCount: 10
+      });
 
       // Fetch buyer profiles for reviews
       const reviewsWithProfiles = await Promise.all(
         reviewsData.map(async (review: any) => {
           let buyerProfile = null;
           if (review.buyer_id) {
-            buyerProfile = await firestoreService.getDocument('profiles', review.buyer_id);
+            buyerProfile = await FirestoreService.getDocument<any>(COLLECTIONS.PROFILES, review.buyer_id);
           }
           return {
             id: review.id,

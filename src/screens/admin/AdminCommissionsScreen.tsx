@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
 import { DollarSign, Settings, Check, Loader2 } from 'lucide-react';
 import { Modal } from '../../components/ui/modal';
 import { useAuth } from '../../contexts/AuthContext';
@@ -43,35 +43,28 @@ export const AdminCommissionsScreen: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [settingsData, vendorReferrals, marketerReferrals] = await Promise.all([
-        supabase.from('commission_settings').select('*'),
-        supabase
-          .from('vendor_referrals')
-          .select(`
-            id,
-            commission_amount,
-            created_at,
-            referrer_vendor_id,
-            vendors!vendor_referrals_referrer_vendor_id_fkey (business_name)
-          `)
-          .eq('status', 'completed')
-          .eq('commission_paid', false),
-        supabase
-          .from('marketer_referrals')
-          .select(`
-            id,
-            commission_amount,
-            created_at,
-            marketer_id,
-            marketers (full_name)
-          `)
-          .eq('status', 'completed')
-          .eq('commission_paid', false),
-      ]);
+      // Fetch settings
+      const settingsData = await FirestoreService.getDocuments<CommissionSetting>('commission_settings');
 
-      if (settingsData.data) {
-        setSettings(settingsData.data);
-        settingsData.data.forEach((setting: any) => {
+      // Fetch pending vendor referrals
+      const vendorReferrals = await FirestoreService.getDocuments<any>('vendor_referrals', {
+        filters: [
+          { field: 'status', operator: '==', value: 'completed' },
+          { field: 'commission_paid', operator: '==', value: false }
+        ]
+      });
+
+      // Fetch pending marketer referrals
+      const marketerReferrals = await FirestoreService.getDocuments<any>('marketer_referrals', {
+        filters: [
+          { field: 'status', operator: '==', value: 'completed' },
+          { field: 'commission_paid', operator: '==', value: false }
+        ]
+      });
+
+      if (settingsData) {
+        setSettings(settingsData);
+        settingsData.forEach((setting: any) => {
           if (setting.type === 'vendor_referral') {
             setVendorAmount(Number(setting.commission_amount));
           } else if (setting.type === 'marketer_referral') {
@@ -80,12 +73,30 @@ export const AdminCommissionsScreen: React.FC = () => {
         });
       }
 
+      // Fetch related data for referrals
+      const vendorIds = Array.from(new Set(vendorReferrals.map(r => r.referrer_vendor_id).filter(Boolean)));
+      const marketerIds = Array.from(new Set(marketerReferrals.map(r => r.marketer_id).filter(Boolean)));
+
+      const vendorsMap = new Map();
+      const marketersMap = new Map();
+
+      if (vendorIds.length > 0) {
+        const allVendors = await FirestoreService.getDocuments('vendors');
+        allVendors.forEach(v => vendorsMap.set(v.id, v));
+      }
+
+      if (marketerIds.length > 0) {
+        const allMarketers = await FirestoreService.getDocuments('marketers');
+        allMarketers.forEach(m => marketersMap.set(m.id, m));
+      }
+
       const pending: PendingCommission[] = [];
 
-      vendorReferrals.data?.forEach((ref: any) => {
+      vendorReferrals.forEach((ref: any) => {
+        const vendor = vendorsMap.get(ref.referrer_vendor_id);
         pending.push({
           id: ref.id,
-          referrer_name: ref.vendors?.business_name || 'Unknown Vendor',
+          referrer_name: vendor?.business_name || 'Unknown Vendor',
           referrer_type: 'vendor',
           referrer_id: ref.referrer_vendor_id,
           commission_amount: Number(ref.commission_amount),
@@ -93,10 +104,11 @@ export const AdminCommissionsScreen: React.FC = () => {
         });
       });
 
-      marketerReferrals.data?.forEach((ref: any) => {
+      marketerReferrals.forEach((ref: any) => {
+        const marketer = marketersMap.get(ref.marketer_id);
         pending.push({
           id: ref.id,
-          referrer_name: ref.marketers?.full_name || 'Unknown Marketer',
+          referrer_name: marketer?.full_name || 'Unknown Marketer',
           referrer_type: 'marketer',
           referrer_id: ref.marketer_id,
           commission_amount: Number(ref.commission_amount),
@@ -116,16 +128,26 @@ export const AdminCommissionsScreen: React.FC = () => {
 
   const handleUpdateSettings = async () => {
     try {
-      await Promise.all([
-        supabase
-          .from('commission_settings')
-          .update({ commission_amount: vendorAmount })
-          .eq('type', 'vendor_referral'),
-        supabase
-          .from('commission_settings')
-          .update({ commission_amount: marketerAmount })
-          .eq('type', 'marketer_referral'),
-      ]);
+      // We need to find the document IDs for the settings first, or assume a fixed ID if designed that way.
+      // Since we loaded them into 'settings' state, we can use that if it has IDs.
+      // But 'settings' state might not be fully populated with IDs if we just did select('*').
+      // Let's re-fetch or use query to update. Firestore doesn't support update by query directly.
+      // We must get the doc ID.
+
+      const settingsDocs = await FirestoreService.getDocuments<any>('commission_settings');
+
+      const vendorSetting = settingsDocs.find(s => s.type === 'vendor_referral');
+      const marketerSetting = settingsDocs.find(s => s.type === 'marketer_referral');
+
+      const updates = [];
+      if (vendorSetting) {
+        updates.push(FirestoreService.updateDocument('commission_settings', vendorSetting.id, { commission_amount: vendorAmount }));
+      }
+      if (marketerSetting) {
+        updates.push(FirestoreService.updateDocument('commission_settings', marketerSetting.id, { commission_amount: marketerAmount }));
+      }
+
+      await Promise.all(updates);
 
       alert('Commission settings updated successfully');
     } catch (error) {
@@ -151,40 +173,30 @@ export const AdminCommissionsScreen: React.FC = () => {
     setProcessing(true);
     try {
       // 1. Record the payment
-      const { error: paymentError } = await supabase
-        .from('commission_payments')
-        .insert({
-          recipient_type: selectedCommission.referrer_type,
-          recipient_id: selectedCommission.referrer_id,
-          amount: selectedCommission.commission_amount,
-          payment_method: paymentMethod,
-          reference_number: referenceNumber || null,
-          status: 'completed',
-          referral_ids: [selectedCommission.id], // Storing as array for potential batch payments
-          notes: paymentNotes || null,
-          processed_by: user?.id,
-          processed_at: new Date().toISOString(),
-        });
-
-      if (paymentError) throw paymentError;
+      await FirestoreService.createDocument('commission_payments', {
+        recipient_type: selectedCommission.referrer_type,
+        recipient_id: selectedCommission.referrer_id,
+        amount: selectedCommission.commission_amount,
+        payment_method: paymentMethod,
+        reference_number: referenceNumber || null,
+        status: 'completed',
+        referral_ids: [selectedCommission.id],
+        notes: paymentNotes || null,
+        processed_by: user?.id,
+        processed_at: new Date().toISOString(),
+      });
 
       // 2. Update the referral status
       if (selectedCommission.referrer_type === 'vendor') {
-        await supabase
-          .from('vendor_referrals')
-          .update({
-            commission_paid: true,
-            commission_paid_at: new Date().toISOString(),
-          })
-          .eq('id', selectedCommission.id);
+        await FirestoreService.updateDocument('vendor_referrals', selectedCommission.id, {
+          commission_paid: true,
+          commission_paid_at: new Date().toISOString(),
+        });
       } else {
-        await supabase
-          .from('marketer_referrals')
-          .update({
-            commission_paid: true,
-            commission_paid_at: new Date().toISOString(),
-          })
-          .eq('id', selectedCommission.id);
+        await FirestoreService.updateDocument('marketer_referrals', selectedCommission.id, {
+          commission_paid: true,
+          commission_paid_at: new Date().toISOString(),
+        });
       }
 
       setIsPaymentModalOpen(false);

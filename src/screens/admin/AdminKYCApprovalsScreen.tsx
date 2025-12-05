@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Search, CheckCircle, XCircle, Eye, FileText, Loader2 } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
 import { logger } from '../../lib/logger';
 import { twilioService } from '../../services/twilioService';
 import type { Database } from '../../types/database';
@@ -38,39 +38,58 @@ export const AdminKYCApprovalsScreen: React.FC = () => {
       setLoading(true);
       logger.info('Loading KYC submissions');
 
-      const { data, error } = await (supabase
-        .from('kyc_submissions') as any)
-        .select(`
-          *,
-          profiles:user_id (
-            full_name,
-            email
-          ),
-          vendors:user_id (
-            business_name,
-            business_phone
-          )
-        `)
-        .order('submitted_at', { ascending: false });
+      const submissionsData = await FirestoreService.getDocuments<any>('kyc_submissions', {
+        orderBy: { field: 'submitted_at', direction: 'desc' }
+      });
 
-      if (error) {
-        logger.error('Error loading KYC submissions', error);
+      if (!submissionsData || submissionsData.length === 0) {
+        setRawSubmissions([]);
+        setSubmissions([]);
         return;
       }
 
-      setRawSubmissions(data || []);
+      setRawSubmissions(submissionsData);
+
+      // Collect unique IDs for fetching related data
+      const userIds = Array.from(new Set(submissionsData.map(s => s.user_id).filter(Boolean)));
+
+      // Fetch profiles and vendors
+      const profilesMap = new Map();
+      const vendorsMap = new Map();
+
+      if (userIds.length > 0) {
+        // Fetch profiles
+        // Note: In a real app with many users, we'd batch this or fetch individually if needed.
+        // For now, fetching all profiles might be heavy if there are thousands, but filtering by IDs is better.
+        // Since 'in' limit is 10, we might need to loop or fetch all if list is long.
+        // Let's assume for admin dashboard we might fetch all relevant profiles or batch.
+        // Simplified approach: Fetch all profiles/vendors for now as we did in other screens, 
+        // or loop through chunks of 10.
+
+        // Fetching all for simplicity in migration, optimization can come later
+        const allProfiles = await FirestoreService.getDocuments('profiles');
+        allProfiles.forEach(p => profilesMap.set(p.id, p));
+
+        const allVendors = await FirestoreService.getDocuments('vendors');
+        allVendors.forEach(v => vendorsMap.set(v.user_id, v));
+      }
 
       // Map to display format
-      const displayData: KYCSubmissionDisplay[] = (data || []).map((sub: any) => ({
-        id: sub.id,
-        vendor_name: sub.profiles?.full_name || 'Unknown',
-        business_name: sub.vendors?.business_name || 'No business name',
-        email: sub.profiles?.email || 'No email',
-        phone: sub.vendors?.business_phone || 'No phone',
-        document_type: sub.id_type,
-        submitted_date: new Date(sub.submitted_at).toLocaleDateString(),
-        status: sub.status
-      }));
+      const displayData: KYCSubmissionDisplay[] = submissionsData.map((sub: any) => {
+        const profile = profilesMap.get(sub.user_id);
+        const vendor = vendorsMap.get(sub.user_id);
+
+        return {
+          id: sub.id,
+          vendor_name: profile?.full_name || 'Unknown',
+          business_name: vendor?.business_name || 'No business name',
+          email: profile?.email || 'No email',
+          phone: vendor?.business_phone || 'No phone',
+          document_type: sub.id_type,
+          submitted_date: new Date(sub.submitted_at).toLocaleDateString(),
+          status: sub.status
+        };
+      });
 
       setSubmissions(displayData);
     } catch (error) {
@@ -109,19 +128,11 @@ export const AdminKYCApprovalsScreen: React.FC = () => {
       setActionLoading(id);
       logger.info(`Approving KYC submission: ${id}`);
 
-      const { error } = await (supabase
-        .from('kyc_submissions') as any)
-        .update({
-          status: 'approved',
-          reviewed_at: new Date().toISOString(),
-          admin_notes: 'Approved by admin'
-        })
-        .eq('id', id);
-
-      if (error) {
-        logger.error('Error approving KYC submission', error);
-        return;
-      }
+      await FirestoreService.updateDocument('kyc_submissions', id, {
+        status: 'approved',
+        reviewed_at: new Date().toISOString(),
+        admin_notes: 'Approved by admin'
+      });
 
       // Update local state
       setSubmissions(
@@ -147,19 +158,11 @@ export const AdminKYCApprovalsScreen: React.FC = () => {
       setActionLoading(id);
       logger.info(`Rejecting KYC submission: ${id}`);
 
-      const { error } = await (supabase
-        .from('kyc_submissions') as any)
-        .update({
-          status: 'rejected',
-          reviewed_at: new Date().toISOString(),
-          admin_notes: 'Rejected by admin'
-        })
-        .eq('id', id);
-
-      if (error) {
-        logger.error('Error rejecting KYC submission', error);
-        return;
-      }
+      await FirestoreService.updateDocument('kyc_submissions', id, {
+        status: 'rejected',
+        reviewed_at: new Date().toISOString(),
+        admin_notes: 'Rejected by admin'
+      });
 
       // Update local state
       setSubmissions(
@@ -231,11 +234,10 @@ export const AdminKYCApprovalsScreen: React.FC = () => {
                 <button
                   key={status}
                   onClick={() => setFilterStatus(status as any)}
-                  className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors whitespace-nowrap ${
-                    filterStatus === status
-                      ? 'bg-green-700 text-white'
-                      : 'bg-white text-neutral-700 border border-neutral-200'
-                  }`}
+                  className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors whitespace-nowrap ${filterStatus === status
+                    ? 'bg-green-700 text-white'
+                    : 'bg-white text-neutral-700 border border-neutral-200'
+                    }`}
                 >
                   {status.charAt(0).toUpperCase() + status.slice(1)}
                 </button>

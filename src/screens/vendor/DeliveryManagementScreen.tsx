@@ -3,7 +3,8 @@ import { Package, Truck, AlertCircle, Upload, CheckCircle } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent } from '../../components/ui/card';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
+import { COLLECTIONS } from '../../lib/collections';
 import { deliveryService } from '../../services/deliveryService';
 
 interface Order {
@@ -60,61 +61,75 @@ export const DeliveryManagementScreen: React.FC = () => {
     setLoading(true);
 
     try {
-      const { data: vendorData } = await supabase
-        .from('vendors')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
-
-      if (!vendorData) return;
-
-      let query = supabase
-        .from('orders')
-        .select(
-          `
-          *,
-          buyer:profiles!orders_buyer_id_fkey(full_name, email),
-          delivery_address:addresses(*)
-        `
-        )
-        .eq('vendor_id', vendorData.id)
-        .eq('payment_status', 'paid');
-
-      if (activeTab === 'pending') {
-        query = query.in('status', ['confirmed', 'processing']);
-      } else if (activeTab === 'in_transit') {
-        query = query.eq('status', 'shipped');
-      } else if (activeTab === 'delivered') {
-        query = query.eq('status', 'delivered');
-      }
-
-      const { data: ordersData, error } = await query.order('created_at', {
-        ascending: false,
+      // Get vendor ID
+      const vendors = await FirestoreService.getDocuments<any>(COLLECTIONS.VENDORS, {
+        filters: [{ field: 'user_id', operator: '==', value: user.uid }],
+        limitCount: 1
       });
 
-      if (error) {
-        console.error('Error loading orders:', error);
-        return;
+      if (vendors.length === 0) return;
+      const vendorData = vendors[0];
+
+      // Build filters for orders
+      const filters: any[] = [
+        { field: 'vendor_id', operator: '==', value: vendorData.id },
+        { field: 'payment_status', operator: '==', value: 'paid' }
+      ];
+
+      if (activeTab === 'pending') {
+        filters.push({ field: 'status', operator: 'in', value: ['confirmed', 'processing'] });
+      } else if (activeTab === 'in_transit') {
+        filters.push({ field: 'status', operator: '==', value: 'shipped' });
+      } else if (activeTab === 'delivered') {
+        filters.push({ field: 'status', operator: '==', value: 'delivered' });
       }
 
-      setOrders(ordersData || []);
+      // Fetch orders
+      const ordersData = await FirestoreService.getDocuments<any>(COLLECTIONS.ORDERS, {
+        filters,
+        orderBy: { field: 'created_at', direction: 'desc' }
+      });
 
-      if (ordersData && ordersData.length > 0) {
-        const { data: deliveriesData } = await supabase
-          .from('deliveries')
-          .select('*')
-          .in(
-            'order_id',
-            ordersData.map((o) => o.id)
-          );
+      // Manual joins for buyer and address, and fetch delivery
+      const enrichedOrders = await Promise.all((ordersData || []).map(async (order) => {
+        const [buyer, address] = await Promise.all([
+          order.buyer_id ? FirestoreService.getDocument<any>(COLLECTIONS.PROFILES, order.buyer_id) : null,
+          order.delivery_address_id ? FirestoreService.getDocument<any>(COLLECTIONS.ADDRESSES, order.delivery_address_id) : null
+        ]);
 
-        if (deliveriesData) {
-          const deliveriesMap: Record<string, Delivery> = {};
-          deliveriesData.forEach((d) => {
-            deliveriesMap[d.order_id] = d;
+        // If address is not found by ID, check if it's embedded
+        const deliveryAddress = address || order.delivery_address || {};
+
+        return {
+          ...order,
+          buyer: {
+            full_name: buyer?.full_name || 'Unknown',
+            email: buyer?.email || 'Unknown',
+          },
+          delivery_address: deliveryAddress,
+        };
+      }));
+
+      setOrders(enrichedOrders);
+
+      if (enrichedOrders.length > 0) {
+        // Fetch deliveries for these orders
+        // Since 'in' query is limited to 10, we'll fetch individually or use a different strategy
+        // For now, let's fetch individually in parallel as it's robust
+        const deliveriesMap: Record<string, Delivery> = {};
+
+        await Promise.all(enrichedOrders.map(async (order) => {
+          const orderDeliveries = await FirestoreService.getDocuments<Delivery>(COLLECTIONS.DELIVERIES, {
+            filters: [{ field: 'order_id', operator: '==', value: order.id }],
+            limitCount: 1
           });
-          setDeliveries(deliveriesMap);
-        }
+
+          if (orderDeliveries.length > 0) {
+            deliveriesMap[order.id] = orderDeliveries[0];
+          }
+        }));
+
+        setDeliveries(deliveriesMap);
       }
     } catch (error) {
       console.error('Error loading orders:', error);
@@ -129,15 +144,16 @@ export const DeliveryManagementScreen: React.FC = () => {
     setProcessingOrders(new Set(processingOrders).add(order.id));
 
     try {
-      const { data: vendorData } = await supabase
-        .from('vendors')
-        .select('*')
-        .eq('user_id', user.id)
-        .single();
+      // Get vendor data
+      const vendors = await FirestoreService.getDocuments<any>(COLLECTIONS.VENDORS, {
+        filters: [{ field: 'user_id', operator: '==', value: user.uid }],
+        limitCount: 1
+      });
 
-      if (!vendorData) {
+      if (vendors.length === 0) {
         throw new Error('Vendor data not found');
       }
+      const vendorData = vendors[0];
 
       const result = await deliveryService.createDelivery({
         orderId: order.id,
@@ -235,11 +251,10 @@ export const DeliveryManagementScreen: React.FC = () => {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`px-6 py-3 font-sans text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
-                  activeTab === tab.id
+                className={`px-6 py-3 font-sans text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${activeTab === tab.id
                     ? 'border-primary-600 text-primary-600'
                     : 'border-transparent text-neutral-600 hover:text-neutral-900'
-                }`}
+                  }`}
               >
                 {tab.label}
                 {tab.count > 0 && (
@@ -266,8 +281,8 @@ export const DeliveryManagementScreen: React.FC = () => {
                   {activeTab === 'pending'
                     ? 'No orders pending shipment'
                     : activeTab === 'in_transit'
-                    ? 'No shipments in transit'
-                    : 'No delivered orders'}
+                      ? 'No shipments in transit'
+                      : 'No delivered orders'}
                 </p>
               </CardContent>
             </Card>

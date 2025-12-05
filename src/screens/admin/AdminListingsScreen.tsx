@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Search, CheckCircle, XCircle, Eye, Loader2 } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
 import { logger } from '../../lib/logger';
 
 interface Listing {
@@ -31,29 +31,43 @@ export const AdminListingsScreen: React.FC = () => {
       setLoading(true);
       logger.info('Loading product listings');
 
-      const { data, error } = await (supabase
-        .from('products') as any)
-        .select(`
-          id,
-          title,
-          category,
-          price,
-          status,
-          created_at,
-          vendor:vendors(business_name)
-        `)
-        .order('created_at', { ascending: false });
+      const products = await FirestoreService.getDocuments<any>('products', {
+        orderBy: { field: 'created_at', direction: 'desc' }
+      });
 
-      if (error) {
-        logger.error('Error loading listings', error);
+      if (!products) {
+        setListings([]);
         return;
       }
 
-      const listingsData = (data || []).map((item: any) => ({
+      // Fetch vendor details
+      // Collect unique vendor IDs
+      const vendorIds = Array.from(new Set(products.map(p => p.vendor_id).filter(Boolean)));
+
+      const vendorMap = new Map<string, string>();
+
+      if (vendorIds.length > 0) {
+        // Fetch vendors. If list is long, we might need to batch or fetch all.
+        // For now, fetch all vendors if > 10, or use 'in' query.
+        let vendors: any[] = [];
+        if (vendorIds.length <= 10) {
+          vendors = await FirestoreService.getDocuments('vendors', {
+            filters: [{ field: 'id', operator: 'in', value: vendorIds }]
+          });
+        } else {
+          vendors = await FirestoreService.getDocuments('vendors');
+        }
+
+        vendors.forEach(v => {
+          vendorMap.set(v.id, v.business_name);
+        });
+      }
+
+      const listingsData = products.map((item: any) => ({
         id: item.id,
         title: item.title,
-        vendor_name: item.vendor?.business_name || 'Unknown',
-        category: item.category,
+        vendor_name: vendorMap.get(item.vendor_id) || 'Unknown',
+        category: item.category_id || 'Uncategorized', // Note: category might be ID or string in schema, assuming ID or string
         price: item.price,
         status: item.status,
         created_at: item.created_at,
@@ -95,15 +109,7 @@ export const AdminListingsScreen: React.FC = () => {
       setActionLoading(id);
       logger.info(`Approving product listing: ${id}`);
 
-      const { error } = await (supabase
-        .from('products') as any)
-        .update({ status: 'active' })
-        .eq('id', id);
-
-      if (error) {
-        logger.error('Error approving product listing', error);
-        return;
-      }
+      await FirestoreService.updateDocument('products', id, { status: 'active' });
 
       // Update local state
       setListings(listings.map(listing =>
@@ -123,15 +129,7 @@ export const AdminListingsScreen: React.FC = () => {
       setActionLoading(id);
       logger.info(`Suspending product listing: ${id}`);
 
-      const { error } = await (supabase
-        .from('products') as any)
-        .update({ status: 'suspended' })
-        .eq('id', id);
-
-      if (error) {
-        logger.error('Error suspending product listing', error);
-        return;
-      }
+      await FirestoreService.updateDocument('products', id, { status: 'suspended' });
 
       // Update local state
       setListings(listings.map(listing =>
@@ -177,11 +175,10 @@ export const AdminListingsScreen: React.FC = () => {
                 <button
                   key={status}
                   onClick={() => setFilterStatus(status as any)}
-                  className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors whitespace-nowrap ${
-                    filterStatus === status
-                      ? 'bg-green-700 text-white'
-                      : 'bg-white text-neutral-700 border border-neutral-200'
-                  }`}
+                  className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors whitespace-nowrap ${filterStatus === status
+                    ? 'bg-green-700 text-white'
+                    : 'bg-white text-neutral-700 border border-neutral-200'
+                    }`}
                 >
                   {status.charAt(0).toUpperCase() + status.slice(1)}
                 </button>

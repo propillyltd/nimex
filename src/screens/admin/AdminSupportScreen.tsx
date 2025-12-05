@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Button } from '../../components/ui/button';
 import { Search } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
 import { logger } from '../../lib/logger';
 import { SupportTicket, TicketStatus, TicketPriority, TicketStats } from '../../types/support';
 import { SUPPORT_CONSTANTS, SUPPORT_MESSAGES } from '../../constants/support';
@@ -33,39 +33,7 @@ export const AdminSupportScreen: React.FC = () => {
 
   useEffect(() => {
     loadTickets();
-
-    // Real-time subscription for all ticket updates
-    const ticketSubscription = supabase
-      .channel('admin_support_tickets')
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'support_tickets',
-        },
-        (payload) => {
-          logger.info('Support ticket updated for admin', payload);
-          debouncedLoadTickets();
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'support_tickets',
-        },
-        (payload) => {
-          logger.info('New support ticket created for admin', payload);
-          debouncedLoadTickets();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      ticketSubscription.unsubscribe();
-    };
+    // Real-time updates can be implemented with FirestoreService.subscribeToQuery if needed
   }, [debouncedLoadTickets]);
 
   const loadTickets = async () => {
@@ -73,30 +41,52 @@ export const AdminSupportScreen: React.FC = () => {
       setLoading(true);
       logger.info('Loading all support tickets for admin');
 
-      const { data, error } = await (supabase
-        .from('support_tickets') as any)
-        .select(`
-          *,
-          profiles:user_id (
-            full_name,
-            email
-          ),
-          assigned_profiles:assigned_to (
-            full_name
-          ),
-          orders:order_id (
-            order_number,
-            status
-          )
-        `)
-        .order('created_at', { ascending: false });
+      const ticketsData = await FirestoreService.getDocuments<any>('support_tickets', {
+        orderBy: { field: 'created_at', direction: 'desc' }
+      });
 
-      if (error) {
-        logger.error('Error loading support tickets', error);
+      if (!ticketsData || ticketsData.length === 0) {
+        setTickets([]);
         return;
       }
 
-      setTickets(data || []);
+      // Collect IDs for related data
+      const userIds = Array.from(new Set(ticketsData.map(t => t.user_id).filter(Boolean)));
+      const assignedIds = Array.from(new Set(ticketsData.map(t => t.assigned_to).filter(Boolean)));
+      const orderIds = Array.from(new Set(ticketsData.map(t => t.order_id).filter(Boolean)));
+
+      const profilesMap = new Map();
+      const ordersMap = new Map();
+
+      // Fetch Profiles (user_id and assigned_to)
+      const allProfileIds = Array.from(new Set([...userIds, ...assignedIds]));
+      if (allProfileIds.length > 0) {
+        const allProfiles = await FirestoreService.getDocuments('profiles');
+        allProfiles.forEach(p => profilesMap.set(p.id, p));
+      }
+
+      // Fetch Orders
+      if (orderIds.length > 0) {
+        const allOrders = await FirestoreService.getDocuments('orders');
+        allOrders.forEach(o => ordersMap.set(o.id, o));
+      }
+
+      const mappedTickets = ticketsData.map((t: any) => ({
+        ...t,
+        profiles: profilesMap.get(t.user_id) ? {
+          full_name: profilesMap.get(t.user_id).full_name,
+          email: profilesMap.get(t.user_id).email
+        } : undefined,
+        assigned_profiles: profilesMap.get(t.assigned_to) ? {
+          full_name: profilesMap.get(t.assigned_to).full_name
+        } : undefined,
+        orders: ordersMap.get(t.order_id) ? {
+          order_number: ordersMap.get(t.order_id).order_number,
+          status: ordersMap.get(t.order_id).status
+        } : undefined
+      }));
+
+      setTickets(mappedTickets);
     } catch (error) {
       logger.error('Error loading support tickets', error);
     } finally {
@@ -137,19 +127,7 @@ export const AdminSupportScreen: React.FC = () => {
     try {
       logger.info(`Updating ticket ${ticketId} status to ${newStatus}`);
 
-      const { error } = await (supabase
-        .from('support_tickets') as any)
-        .update(optimisticUpdateData)
-        .eq('id', ticketId);
-
-      if (error) {
-        // Revert optimistic update on error
-        setTickets(previousTickets);
-        setSelectedTicket(previousSelectedTicket);
-        const errorMessage = handleSupportError(error, 'Updating ticket status');
-        alert(errorMessage);
-        return;
-      }
+      await FirestoreService.updateDocument('support_tickets', ticketId, optimisticUpdateData);
 
       setSelectedTicket(null);
       logger.info(`Ticket ${ticketId} status updated to ${newStatus}`);
@@ -202,11 +180,10 @@ export const AdminSupportScreen: React.FC = () => {
                 <button
                   key={status}
                   onClick={() => setFilterStatus(status as any)}
-                  className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors whitespace-nowrap ${
-                    filterStatus === status
+                  className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors whitespace-nowrap ${filterStatus === status
                       ? 'bg-green-700 text-white'
                       : 'bg-white text-neutral-700 border border-neutral-200'
-                  }`}
+                    }`}
                 >
                   {status === 'all' ? 'All Status' : status.replace('_', ' ')}
                 </button>
@@ -217,11 +194,10 @@ export const AdminSupportScreen: React.FC = () => {
                 <button
                   key={priority}
                   onClick={() => setFilterPriority(priority as any)}
-                  className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors whitespace-nowrap ${
-                    filterPriority === priority
+                  className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors whitespace-nowrap ${filterPriority === priority
                       ? 'bg-red-700 text-white'
                       : 'bg-white text-neutral-700 border border-neutral-200'
-                  }`}
+                    }`}
                 >
                   {priority === 'all' ? 'All Priority' : priority}
                 </button>

@@ -10,9 +10,11 @@ import {
   Filter,
   X,
 } from 'lucide-react';
-import { firestoreService, where, orderBy, limit } from '../services/firestoreService';
+import { FirestoreService } from '../services/firestore.service';
+import { where, orderBy, limit, QueryConstraint } from 'firebase/firestore';
 import { logger } from '../lib/logger';
 import { TABLES, COLUMNS } from '../services/constants';
+import { COLLECTIONS } from '../lib/collections';
 import type { Database } from '../types/database';
 
 type VendorWithProfile = Database['public']['Tables']['vendors']['Row'] & {
@@ -45,7 +47,7 @@ export const VendorsScreen: React.FC = () => {
 
   const loadMarkets = async () => {
     try {
-      const markets = await firestoreService.getDocuments<Market>('markets', [
+      const markets = await FirestoreService.getDocuments<Market>(COLLECTIONS.MARKETS, [
         where('is_active', '==', true),
         where('vendor_count', '>', 0),
         orderBy('vendor_count', 'desc'),
@@ -64,42 +66,33 @@ export const VendorsScreen: React.FC = () => {
       logger.info('Loading vendors for buyers dashboard');
 
       // Fetch vendors who have completed onboarding (business_name is not empty)
-      const { data: vendorsData, error } = await (supabase
-        .from(TABLES.VENDORS) as any)
-        .select(`
-          *,
-          profiles:user_id (
-            id,
-            email,
-            full_name
-          )
-        `)
-        .eq(COLUMNS.VENDORS.IS_ACTIVE, true)
-        .not(COLUMNS.VENDORS.BUSINESS_NAME, 'is', null)
-        .neq(COLUMNS.VENDORS.BUSINESS_NAME, '')
-        .order(COLUMNS.VENDORS.RATING, { ascending: false })
-        .limit(20);
+      const vendorsData = await FirestoreService.getDocuments<any>(COLLECTIONS.VENDORS, [
+        where(COLUMNS.VENDORS.IS_ACTIVE, '==', true),
+        where(COLUMNS.VENDORS.BUSINESS_NAME, '!=', ''),
+        orderBy(COLUMNS.VENDORS.BUSINESS_NAME), // Required for != filter
+        orderBy(COLUMNS.VENDORS.RATING, 'desc'),
+        limit(20)
+      ]);
 
-      if (error) {
-        logger.error('Error loading vendors', error);
-        throw error;
-      }
-
-      // Get review counts for each vendor
+      // Get profiles and review counts for each vendor
       const vendorsWithReviews = await Promise.all(
-        (vendorsData || []).map(async (vendor: any) => {
+        vendorsData.map(async (vendor) => {
           try {
-            const { count } = await supabase
-              .from('reviews')
-              .select('*', { count: 'exact', head: true })
-              .eq('vendor_id', vendor.id);
+            // Fetch profile
+            const profile = await FirestoreService.getDocument<any>(COLLECTIONS.PROFILES, vendor.user_id);
+
+            // Fetch review count
+            const reviewCount = await FirestoreService.countDocuments(COLLECTIONS.REVIEWS, [
+              where('vendor_id', '==', vendor.id)
+            ]);
 
             return {
               ...vendor,
-              review_count: count || 0
+              profile,
+              review_count: reviewCount
             };
-          } catch (reviewError) {
-            logger.error(`Error getting review count for vendor ${vendor.id}`, reviewError);
+          } catch (err) {
+            logger.error(`Error enriching vendor data for ${vendor.id}`, err);
             return {
               ...vendor,
               review_count: 0
@@ -127,45 +120,39 @@ export const VendorsScreen: React.FC = () => {
       setVendorsLoading(true);
       logger.info(`Searching vendors near: ${location}`);
 
-      // For now, we'll search by market location or business address
-      // In a real implementation, you might use geocoding or location services
-      const { data: searchResults, error } = await (supabase
-        .from(TABLES.VENDORS) as any)
-        .select(`
-          *,
-          profiles:user_id (
-            id,
-            email,
-            full_name
-          )
-        `)
-        .eq(COLUMNS.VENDORS.IS_ACTIVE, true)
-        .not(COLUMNS.VENDORS.BUSINESS_NAME, 'is', null)
-        .neq(COLUMNS.VENDORS.BUSINESS_NAME, '')
-        .or(`market_location.ilike.%${location}%,business_address.ilike.%${location}%`)
-        .order(COLUMNS.VENDORS.RATING, { ascending: false })
-        .limit(20);
+      // Fetch all active vendors and filter client-side since Firestore doesn't support ILIKE or OR across fields easily
+      const allVendors = await FirestoreService.getDocuments<any>(COLLECTIONS.VENDORS, [
+        where(COLUMNS.VENDORS.IS_ACTIVE, '==', true),
+        where(COLUMNS.VENDORS.BUSINESS_NAME, '!=', ''),
+        orderBy(COLUMNS.VENDORS.BUSINESS_NAME)
+      ]);
 
-      if (error) {
-        logger.error('Error searching vendors', error);
-        return;
-      }
+      const searchTerm = location.toLowerCase();
+      const searchResults = allVendors.filter(vendor => {
+        const marketMatch = vendor.market_location?.toLowerCase().includes(searchTerm);
+        const addressMatch = vendor.business_address?.toLowerCase().includes(searchTerm);
+        return marketMatch || addressMatch;
+      }).slice(0, 20);
 
-      // Get review counts for search results
+      // Get profiles and review counts for search results
       const vendorsWithReviews = await Promise.all(
-        (searchResults || []).map(async (vendor: any) => {
+        searchResults.map(async (vendor) => {
           try {
-            const { count } = await supabase
-              .from('reviews')
-              .select('*', { count: 'exact', head: true })
-              .eq('vendor_id', vendor.id);
+            // Fetch profile
+            const profile = await FirestoreService.getDocument<any>(COLLECTIONS.PROFILES, vendor.user_id);
+
+            // Fetch review count
+            const reviewCount = await FirestoreService.countDocuments(COLLECTIONS.REVIEWS, [
+              where('vendor_id', '==', vendor.id)
+            ]);
 
             return {
               ...vendor,
-              review_count: count || 0
+              profile,
+              review_count: reviewCount
             };
-          } catch (reviewError) {
-            logger.error(`Error getting review count for vendor ${vendor.id}`, reviewError);
+          } catch (err) {
+            logger.error(`Error enriching vendor data for ${vendor.id}`, err);
             return {
               ...vendor,
               review_count: 0
@@ -196,43 +183,36 @@ export const VendorsScreen: React.FC = () => {
         setVendorsLoading(true);
         logger.info(`Filtering vendors by market: ${marketId}`);
 
-        const { data: marketVendors, error } = await (supabase
-          .from(TABLES.VENDORS) as any)
-          .select(`
-            *,
-            profiles:user_id (
-              id,
-              email,
-              full_name
-            )
-          `)
-          .eq(COLUMNS.VENDORS.IS_ACTIVE, true)
-          .not(COLUMNS.VENDORS.BUSINESS_NAME, 'is', null)
-          .neq(COLUMNS.VENDORS.BUSINESS_NAME, '')
-          .eq(COLUMNS.VENDORS.MARKET_LOCATION, markets.find(m => m.id === marketId)?.name || '')
-          .order(COLUMNS.VENDORS.RATING, { ascending: false })
-          .limit(20);
+        const marketName = markets.find(m => m.id === marketId)?.name || '';
 
-        if (error) {
-          logger.error('Error filtering vendors by market', error);
-          return;
-        }
+        const marketVendors = await FirestoreService.getDocuments<any>(COLLECTIONS.VENDORS, [
+          where(COLUMNS.VENDORS.IS_ACTIVE, '==', true),
+          where(COLUMNS.VENDORS.BUSINESS_NAME, '!=', ''),
+          where(COLUMNS.VENDORS.MARKET_LOCATION, '==', marketName),
+          orderBy(COLUMNS.VENDORS.BUSINESS_NAME), // Required for != filter
+          orderBy(COLUMNS.VENDORS.RATING, 'desc'),
+          limit(20)
+        ]);
 
-        // Get review counts for filtered results
+        // Get profiles and review counts for filtered results
         const vendorsWithReviews = await Promise.all(
-          (marketVendors || []).map(async (vendor: any) => {
+          marketVendors.map(async (vendor) => {
             try {
-              const { count } = await supabase
-                .from('reviews')
-                .select('*', { count: 'exact', head: true })
-                .eq('vendor_id', vendor.id);
+              // Fetch profile
+              const profile = await FirestoreService.getDocument<any>(COLLECTIONS.PROFILES, vendor.user_id);
+
+              // Fetch review count
+              const reviewCount = await FirestoreService.countDocuments(COLLECTIONS.REVIEWS, [
+                where('vendor_id', '==', vendor.id)
+              ]);
 
               return {
                 ...vendor,
-                review_count: count || 0
+                profile,
+                review_count: reviewCount
               };
-            } catch (reviewError) {
-              logger.error(`Error getting review count for vendor ${vendor.id}`, reviewError);
+            } catch (err) {
+              logger.error(`Error enriching vendor data for ${vendor.id}`, err);
               return {
                 ...vendor,
                 review_count: 0

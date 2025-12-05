@@ -3,9 +3,9 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { ArrowLeft, Save, Loader2, Upload, X, Video } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
-import { storage } from '../../lib/firebase.config';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { FirestoreService } from '../../services/firestore.service';
+import { FirebaseStorageService } from '../../services/firebaseStorage.service';
+import { COLLECTIONS, STORAGE_PATHS } from '../../lib/collections';
 import { useAuth } from '../../contexts/AuthContext';
 import { ProductTagsInput } from '../../components/vendor/ProductTagsInput';
 
@@ -58,12 +58,9 @@ export const CreateProductScreen: React.FC = () => {
 
   const loadCategories = async () => {
     try {
-      const { data, error } = await supabase
-        .from('categories')
-        .select('id, name')
-        .order('name');
-
-      if (error) throw error;
+      const data = await FirestoreService.getDocuments<Category>(COLLECTIONS.CATEGORIES, {
+        orderBy: { field: 'name', direction: 'asc' }
+      });
       setCategories(data || []);
     } catch (err: any) {
       console.error('Error loading categories:', err);
@@ -73,30 +70,19 @@ export const CreateProductScreen: React.FC = () => {
   const loadProductForEditing = async (productId: string) => {
     try {
       setLoading(true);
-      const { data: product, error } = await supabase
-        .from('products')
-        .select(`
-          *,
-          product_tags (
-            tag
-          )
-        `)
-        .eq('id', productId)
-        .single();
-
-      if (error) throw error;
+      const product = await FirestoreService.getDocument<any>(COLLECTIONS.PRODUCTS, productId);
 
       if (product) {
         setFormData({
-          name: product.title || product.name, // Handle potential schema difference
+          name: product.title || product.name,
           description: product.description || '',
           price: product.price.toString(),
           compare_at_price: product.compare_at_price?.toString() || '',
           stock_quantity: product.stock_quantity.toString(),
           category_id: product.category_id || '',
-          image_url: typeof product.images === 'string' ? product.images : (product.images as any)?.url || '', // Handle JSON or string
+          image_url: typeof product.images === 'string' ? product.images : (product.images as any)?.url || '',
           video_url: product.video_url || '',
-          tags: product.product_tags?.map((pt: any) => pt.tag) || [],
+          tags: product.tags || [], // Assuming tags are stored as array of strings in Firestore
         });
 
         const img = typeof product.images === 'string' ? product.images : (product.images as any)?.url;
@@ -153,43 +139,36 @@ export const CreateProductScreen: React.FC = () => {
       if (!user) throw new Error('User not authenticated');
 
       // Get vendor ID
-      const { data: vendor, error: vendorError } = await supabase
-        .from('vendors')
-        .select('id')
-        .eq('user_id', user.id)
-        .maybeSingle();
+      const vendors = await FirestoreService.getDocuments<any>(COLLECTIONS.VENDORS, {
+        filters: [{ field: 'user_id', operator: '==', value: user.uid }],
+        limitCount: 1
+      });
 
-      if (vendorError) throw vendorError;
-      if (!vendor) throw new Error('Vendor profile not found');
+      if (vendors.length === 0) throw new Error('Vendor profile not found');
+      const vendor = vendors[0];
 
       let finalVideoUrl = formData.video_url;
 
       if (videoFile) {
         setIsUploading(true);
         try {
-          // Generate a storage path ID (use existing ID if editing, or random if new)
           const storageId = id || `new_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
           const fileExt = videoFile.name.split('.').pop();
           const fileName = `video_${Date.now()}.${fileExt}`;
-          const storageRef = ref(storage, `products/${storageId}/${fileName}`);
+          const path = `products/${storageId}`;
 
-          const uploadTask = uploadBytesResumable(storageRef, videoFile);
+          const { promise } = FirebaseStorageService.uploadFileWithProgress(
+            videoFile,
+            path,
+            fileName,
+            (progress) => {
+              setUploadProgress(progress.progress);
+            }
+          );
 
-          await new Promise<void>((resolve, reject) => {
-            uploadTask.on('state_changed',
-              (snapshot) => {
-                const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                setUploadProgress(progress);
-              },
-              (error) => {
-                reject(error);
-              },
-              async () => {
-                finalVideoUrl = await getDownloadURL(uploadTask.snapshot.ref);
-                resolve();
-              }
-            );
-          });
+          const result = await promise;
+          if (result.error) throw result.error;
+          finalVideoUrl = result.url || '';
 
           setIsUploading(false);
         } catch (err) {
@@ -198,70 +177,35 @@ export const CreateProductScreen: React.FC = () => {
         }
       }
 
-      let product;
-
       const productData = {
-        title: formData.name, // Schema uses title
-        name: formData.name, // Keep for compatibility if schema is mixed
+        vendor_id: vendor.id,
+        title: formData.name,
+        name: formData.name,
         description: formData.description || null,
         price: parseFloat(formData.price),
         compare_at_price: formData.compare_at_price ? parseFloat(formData.compare_at_price) : null,
         stock_quantity: parseInt(formData.stock_quantity),
         category_id: formData.category_id || null,
-        images: formData.image_url, // Storing as string for now, or object if needed
-        image_url: formData.image_url, // Keep for compatibility
+        images: formData.image_url,
+        image_url: formData.image_url,
         video_url: finalVideoUrl || null,
+        tags: formData.tags, // Store tags directly in product document
+        updated_at: new Date().toISOString()
       };
 
       if (isEditing && id) {
         // Update existing product
-        const { data: updatedProduct, error: updateError } = await supabase
-          .from('products')
-          .update(productData)
-          .eq('id', id)
-          .select()
-          .single();
-
-        if (updateError) throw updateError;
-        product = updatedProduct;
+        await FirestoreService.updateDocument(COLLECTIONS.PRODUCTS, id, productData);
       } else {
         // Create new product
-        const { data: newProduct, error: createError } = await supabase
-          .from('products')
-          .insert({
-            vendor_id: vendor.id,
-            ...productData,
-            status: 'active', // Schema uses status
-            is_active: true, // Keep for compatibility
-          })
-          .select()
-          .single();
-
-        if (createError) throw createError;
-        product = newProduct;
-      }
-
-      // Handle tags for both create and update
-      if (product) {
-        // Delete existing tags first
-        await supabase
-          .from('product_tags')
-          .delete()
-          .eq('product_id', product.id);
-
-        // Add new tags if any
-        if (formData.tags.length > 0) {
-          const tagInserts = formData.tags.map((tag: string) => ({
-            product_id: product.id,
-            tag: tag,
-          }));
-
-          const { error: tagsError } = await supabase
-            .from('product_tags')
-            .insert(tagInserts);
-
-          if (tagsError) throw tagsError;
-        }
+        const newId = `prod_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        await FirestoreService.setDocument(COLLECTIONS.PRODUCTS, newId, {
+          ...productData,
+          id: newId,
+          status: 'active',
+          is_active: true,
+          created_at: new Date().toISOString()
+        });
       }
 
       setSuccess(isEditing ? 'Product updated successfully!' : 'Product created successfully!');
@@ -542,11 +486,14 @@ export const CreateProductScreen: React.FC = () => {
                     ))}
                   </div>
                   <ProductTagsInput
-                    tags={formData.tags.filter(t => !PREDEFINED_TAGS.find(pt => pt.id === t))}
-                    onChange={(customTags) => {
+                    categoryId={formData.category_id}
+                    selectedTags={formData.tags
+                      .filter(t => !PREDEFINED_TAGS.find(pt => pt.id === t))
+                      .map(t => ({ id: t, tag_name: t, display_name: t, usage_count: 0 }))}
+                    onTagsChange={(customTags) => {
                       // Merge custom tags with selected predefined tags
                       const predefined = formData.tags.filter(t => PREDEFINED_TAGS.find(pt => pt.id === t));
-                      setFormData({ ...formData, tags: [...predefined, ...customTags] });
+                      setFormData({ ...formData, tags: [...predefined, ...customTags.map(t => t.tag_name)] });
                     }}
                   />
                   <p className="font-sans text-xs text-neutral-500 mt-1">

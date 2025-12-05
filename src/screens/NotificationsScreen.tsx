@@ -2,7 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { Bell, Package, MessageCircle, DollarSign, AlertCircle, CheckCircle } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { useAuth } from '../contexts/AuthContext';
-import { firestoreService, where, orderBy, limit } from '../services/firestoreService';
+import { FirestoreService } from '../services/firestore.service';
+import { COLLECTIONS } from '../lib/collections';
+import { where, orderBy, onSnapshot, query, collection } from 'firebase/firestore';
+import { db } from '../lib/firebase.config';
 
 interface Notification {
   id: string;
@@ -21,40 +24,39 @@ export const NotificationsScreen: React.FC = () => {
   const [filter, setFilter] = useState<'all' | 'unread'>('all');
 
   useEffect(() => {
-    if (user) {
-      loadNotifications();
-    }
-  }, [user]);
-
-  const loadNotifications = async () => {
     if (!user) return;
 
-    try {
-      const { data, error } = await supabase
-        .from('notifications')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
+    // Real-time subscription
+    const q = query(
+      collection(db, COLLECTIONS.NOTIFICATIONS),
+      where('user_id', '==', user.id),
+      orderBy('created_at', 'desc')
+    );
 
-      if (error) throw error;
-      setNotifications(data || []);
-    } catch (error) {
-      console.error('Error loading notifications:', error);
-    } finally {
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const newNotifications = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Notification[];
+
+      setNotifications(newNotifications);
       setLoading(false);
-    }
-  };
+    }, (error) => {
+      console.error('Error loading notifications:', error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // Removed manual loadNotifications as subscription handles it
 
   const markAsRead = async (notificationId: string) => {
     try {
-      await supabase
-        .from('notifications')
-        .update({ is_read: true })
-        .eq('id', notificationId);
-
-      setNotifications((prev) =>
-        prev.map((n) => (n.id === notificationId ? { ...n, is_read: true } : n))
-      );
+      await FirestoreService.updateDocument(COLLECTIONS.NOTIFICATIONS, notificationId, {
+        is_read: true
+      });
+      // State update handled by subscription
     } catch (error) {
       console.error('Error marking notification as read:', error);
     }
@@ -62,13 +64,18 @@ export const NotificationsScreen: React.FC = () => {
 
   const markAllAsRead = async () => {
     try {
-      await supabase
-        .from('notifications')
-        .update({ is_read: true })
-        .eq('user_id', user?.id)
-        .eq('is_read', false);
+      const unread = notifications.filter(n => !n.is_read);
+      if (unread.length === 0) return;
 
-      setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+      const batchOps = unread.map(n => ({
+        type: 'update' as const,
+        collectionName: COLLECTIONS.NOTIFICATIONS,
+        documentId: n.id,
+        data: { is_read: true }
+      }));
+
+      await FirestoreService.batchWrite(batchOps);
+      // State update handled by subscription
     } catch (error) {
       console.error('Error marking all as read:', error);
     }
@@ -131,8 +138,8 @@ export const NotificationsScreen: React.FC = () => {
           <button
             onClick={() => setFilter('all')}
             className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${filter === 'all'
-                ? 'bg-primary-500 text-white'
-                : 'bg-white text-neutral-700 hover:bg-neutral-50'
+              ? 'bg-primary-500 text-white'
+              : 'bg-white text-neutral-700 hover:bg-neutral-50'
               }`}
           >
             All
@@ -140,8 +147,8 @@ export const NotificationsScreen: React.FC = () => {
           <button
             onClick={() => setFilter('unread')}
             className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${filter === 'unread'
-                ? 'bg-primary-500 text-white'
-                : 'bg-white text-neutral-700 hover:bg-neutral-50'
+              ? 'bg-primary-500 text-white'
+              : 'bg-white text-neutral-700 hover:bg-neutral-50'
               }`}
           >
             Unread {unreadCount > 0 && `(${unreadCount})`}

@@ -83,42 +83,53 @@ export class FirestoreService {
     /**
      * Get multiple documents with optional filtering and pagination
      */
+    /**
+     * Get multiple documents with optional filtering and pagination
+     */
     static async getDocuments<T = DocumentData>(
         collectionName: string,
-        options?: QueryOptions
+        optionsOrConstraints?: QueryOptions | QueryConstraint[]
     ): Promise<T[]> {
         try {
             const constraints: QueryConstraint[] = [];
 
-            // Add filters
-            if (options?.filters) {
-                options.filters.forEach((filter) => {
-                    constraints.push(where(filter.field, filter.operator, filter.value));
-                });
-            }
+            if (Array.isArray(optionsOrConstraints)) {
+                // It's an array of QueryConstraints
+                constraints.push(...optionsOrConstraints);
+            } else if (optionsOrConstraints) {
+                // It's QueryOptions
+                const options = optionsOrConstraints;
 
-            // Add ordering (legacy)
-            if (options?.orderByField) {
-                constraints.push(
-                    orderBy(options.orderByField, options.orderByDirection || 'asc')
-                );
-            }
+                // Add filters
+                if (options.filters) {
+                    options.filters.forEach((filter) => {
+                        constraints.push(where(filter.field, filter.operator, filter.value));
+                    });
+                }
 
-            // Add ordering (new object style)
-            if (options?.orderBy) {
-                constraints.push(
-                    orderBy(options.orderBy.field, options.orderBy.direction || 'asc')
-                );
-            }
+                // Add ordering (legacy)
+                if (options.orderByField) {
+                    constraints.push(
+                        orderBy(options.orderByField, options.orderByDirection || 'asc')
+                    );
+                }
 
-            // Add limit
-            if (options?.limitCount) {
-                constraints.push(limit(options.limitCount));
-            }
+                // Add ordering (new object style)
+                if (options.orderBy) {
+                    constraints.push(
+                        orderBy(options.orderBy.field, options.orderBy.direction || 'asc')
+                    );
+                }
 
-            // Add pagination
-            if (options?.startAfterDoc) {
-                constraints.push(startAfter(options.startAfterDoc));
+                // Add limit
+                if (options.limitCount) {
+                    constraints.push(limit(options.limitCount));
+                }
+
+                // Add pagination
+                if (options.startAfterDoc) {
+                    constraints.push(startAfter(options.startAfterDoc));
+                }
             }
 
             const q = query(collection(db, collectionName), ...constraints);

@@ -21,6 +21,7 @@ export const COLLECTIONS = {
     // Products & Categories
     PRODUCTS: 'products',
     CATEGORIES: 'categories',
+    PRODUCT_TAGS: 'product_tags',
     REVIEWS: 'reviews',
     WISHLISTS: 'wishlists',
 

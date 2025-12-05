@@ -6,7 +6,8 @@ import { Separator } from "../../../../components/ui/separator";
 import { ProductCard } from "../../../../components/products/ProductCard";
 import { recommendationService, ProductRecommendation, VendorRanking } from "../../../../services/recommendationService";
 import { Loader2, Star, MapPin, TrendingUp, Clock } from "lucide-react";
-import { supabase } from "../../../../lib/supabase";
+import { FirestoreService } from "../../../../services/firestore.service";
+import { COLLECTIONS } from "../../../../lib/collections";
 
 const socialIcons = [
   { src: "/container-3.svg", alt: "Facebook" },
@@ -70,13 +71,13 @@ export const RecommendationsSection = (): JSX.Element => {
       const vendors = await recommendationService.getTopVendors(4);
       setTopVendors(vendors);
 
-      // Fetch Fresh Recommendations (New Arrivals) manually since it's not in service yet
-      const { data: newArrivals } = await supabase
-        .from('products')
-        .select('*')
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .limit(4);
+      // Fetch Fresh Recommendations (New Arrivals)
+      const newArrivals = await FirestoreService.getDocuments<any>(COLLECTIONS.PRODUCTS, {
+        filters: [{ field: 'is_active', operator: '==', value: true }],
+        orderByField: 'created_at',
+        orderByDirection: 'desc',
+        limitCount: 4
+      });
 
       setFreshRecommendations(newArrivals || []);
 

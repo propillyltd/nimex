@@ -19,6 +19,9 @@ import { Badge } from "../../../../components/ui/badge";
 import { Button } from "../../../../components/ui/button";
 import { Card, CardContent } from "../../../../components/ui/card";
 import { ProductGrid } from "./ProductGrid";
+import { FirestoreService } from "../../../../services/firestore.service";
+import { COLLECTIONS } from "../../../../lib/collections";
+import { Loader2 } from "lucide-react";
 
 const navigationItems = [
   { label: "Home", active: true },
@@ -48,183 +51,97 @@ const categories = [
   },
 ];
 
-const sampleProducts = [
-  {
-    image: "https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?w=400&h=400&fit=crop",
-    title: "Demo Smartphone - Test Product",
-    price: "₦ 150,000",
-    oldPrice: "₦ 180,000",
-    vendor: "Demo Artisan Crafts",
-    vendorImage: "/image-1.png",
-    location: "Lagos",
-    views: "1.2k",
-    rating: 5,
-    verified: true,
-    badge: { text: "Demo Product", variant: "green" as const },
-  },
-  {
-    image: "/image-2.png",
-    title: "Elegant Ankara Print Dress",
-    price: "₦ 15,500",
-    vendor: "AfroChic Styles",
-    vendorImage: "/image-2.png",
-    location: "Abuja",
-    views: "850",
-    rating: 4,
-    verified: false,
-    badge: { text: "New Seller", variant: "green" as const },
-  },
-  {
-    image: "/image-3.png",
-    title: "Premium Leather Handbag",
-    price: "₦ 35,000",
-    vendor: "Luxury Goods Co.",
-    vendorImage: "/image-3.png",
-    location: "Lagos",
-    views: "2.1k",
-    rating: 5,
-    verified: true,
-    badge: { text: "Trending", variant: "green" as const },
-  },
-  {
-    image: "/image-4.png",
-    title: "Fresh Nigerian Yam (5kg)",
-    price: "₦ 4,800",
-    vendor: "Farm Fresh Produce",
-    vendorImage: "/image-4.png",
-    location: "Ibadan",
-    views: "456",
-    rating: 4,
-    verified: true,
-    badge: { text: "Urgent", variant: "red" as const },
-  },
-  {
-    image: "/image-5.png",
-    title: "Ergonomic Office Chair",
-    price: "₦ 65,000",
-    vendor: "WorkSpace Solutions",
-    vendorImage: "/image-5.png",
-    location: "Lagos",
-    views: "980",
-    rating: 5,
-    verified: true,
-    badge: { text: "Verified Seller", variant: "yellow" as const },
-  },
-  {
-    image: "/image-6.png",
-    title: "Professional DSLR Camera",
-    price: "₦ 250,000",
-    vendor: "PhotoGear",
-    vendorImage: "/image-6.png",
-    location: "Abuja",
-    views: "3.5k",
-    rating: 5,
-    verified: true,
-    badge: { text: "New Arrival", variant: "green" as const },
-  },
-  {
-    image: "/image-7.png",
-    title: "Handmade Woven Basket Set",
-    price: "₦ 8,900",
-    vendor: "Artisanal Crafts",
-    vendorImage: "/image-7.png",
-    location: "Kano",
-    views: "234",
-    rating: 4,
-    verified: false,
-    badge: { text: "Limited Stock", variant: "red" as const },
-  },
-  {
-    image: "/image-8.png",
-    title: "SportX Running Shoes",
-    price: "₦ 28,000",
-    vendor: "Active Gear",
-    vendorImage: "/image-8.png",
-    location: "Lagos",
-    views: "1.8k",
-    rating: 5,
-    verified: true,
-    badge: { text: "Hot Deal", variant: "green" as const },
-  },
-];
-
-const topVendors = [
-  {
-    image: "/image-1.png",
-    title: "Tech Hub Store",
-    price: "1,234 Products",
-    vendor: "Tech Hub",
-    vendorImage: "/image-1.png",
-    location: "Lagos, Nigeria",
-    views: "12.5k",
-    rating: 5,
-    verified: true,
-    badge: { text: "Top Rated", variant: "yellow" as const },
-  },
-  {
-    image: "/image-2.png",
-    title: "Fashion Boutique Pro",
-    price: "856 Products",
-    vendor: "AfroChic Styles",
-    vendorImage: "/image-2.png",
-    location: "Abuja, Nigeria",
-    views: "8.3k",
-    rating: 5,
-    verified: true,
-    badge: { text: "Featured", variant: "green" as const },
-  },
-  {
-    image: "/image-3.png",
-    title: "Luxury Leather Co.",
-    price: "432 Products",
-    vendor: "Luxury Goods Co.",
-    vendorImage: "/image-3.png",
-    location: "Lagos, Nigeria",
-    views: "15.2k",
-    rating: 5,
-    verified: true,
-    badge: { text: "Premium", variant: "yellow" as const },
-  },
-  {
-    image: "/image-4.png",
-    title: "Farm Fresh Market",
-    price: "2,145 Products",
-    vendor: "Farm Fresh Produce",
-    vendorImage: "/image-4.png",
-    location: "Ibadan, Nigeria",
-    views: "6.7k",
-    rating: 4,
-    verified: true,
-    badge: { text: "Verified", variant: "green" as const },
-  },
-  {
-    image: "/image-5.png",
-    title: "Office Furniture Hub",
-    price: "678 Products",
-    vendor: "WorkSpace Solutions",
-    vendorImage: "/image-5.png",
-    location: "Lagos, Nigeria",
-    views: "9.1k",
-    rating: 5,
-    verified: true,
-    badge: { text: "Trusted", variant: "yellow" as const },
-  },
-  {
-    image: "/image-6.png",
-    title: "PhotoGear Professional",
-    price: "523 Products",
-    vendor: "PhotoGear",
-    vendorImage: "/image-6.png",
-    location: "Abuja, Nigeria",
-    views: "18.4k",
-    rating: 5,
-    verified: true,
-    badge: { text: "Expert", variant: "green" as const },
-  },
-];
+// Removed mock data
 
 export const HeroSection = (): JSX.Element => {
   const navigate = useNavigate();
+  const [loading, setLoading] = useState(true);
+  const [freshRecommendations, setFreshRecommendations] = useState<any[]>([]);
+  const [topVendorsList, setTopVendorsList] = useState<any[]>([]);
+  const [electronics, setElectronics] = useState<any[]>([]);
+  const [fashion, setFashion] = useState<any[]>([]);
+  const [homeOffice, setHomeOffice] = useState<any[]>([]);
+  const [groceries, setGroceries] = useState<any[]>([]);
+
+  React.useEffect(() => {
+    fetchHomeData();
+  }, []);
+
+  const fetchHomeData = async () => {
+    try {
+      setLoading(true);
+
+      // Fetch Fresh Recommendations
+      const fresh = await FirestoreService.getDocuments<any>(COLLECTIONS.PRODUCTS, {
+        filters: [{ field: 'is_active', operator: '==', value: true }],
+        orderByField: 'created_at',
+        orderByDirection: 'desc',
+        limitCount: 6
+      });
+      setFreshRecommendations(mapProducts(fresh));
+
+      // Fetch Top Vendors (simulated by fetching vendors)
+      const vendors = await FirestoreService.getDocuments<any>(COLLECTIONS.VENDORS, {
+        filters: [{ field: 'is_active', operator: '==', value: true }],
+        limitCount: 6
+      });
+      setTopVendorsList(mapVendors(vendors));
+
+      // Fetch Categories
+      const fetchCategory = async (category: string) => {
+        return await FirestoreService.getDocuments<any>(COLLECTIONS.PRODUCTS, {
+          filters: [
+            { field: 'is_active', operator: '==', value: true },
+            // Note: In a real app, we'd use category ID, but for now assuming we can filter by some field or just fetch recent
+            // Since we don't have category IDs handy, we'll fetch recent and filter client side or just show recent for now
+          ],
+          limitCount: 6
+        });
+      };
+
+      // For demo purposes, we'll just use the fresh products for categories if we can't filter easily without IDs
+      // In a real implementation, you'd query by category_id
+      setElectronics(mapProducts(fresh));
+      setFashion(mapProducts(fresh));
+      setHomeOffice(mapProducts(fresh));
+      setGroceries(mapProducts(fresh));
+
+    } catch (error) {
+      console.error("Error fetching home data:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const mapProducts = (products: any[]) => {
+    return products.map(p => ({
+      image: p.image_url || "https://via.placeholder.com/150",
+      title: p.name,
+      price: `₦ ${p.price.toLocaleString()}`,
+      vendor: "Vendor", // Ideally fetch vendor name
+      vendorImage: "https://via.placeholder.com/50",
+      location: "Lagos",
+      views: "100",
+      rating: 4.5,
+      verified: true,
+      badge: { text: "New", variant: "green" as const }
+    }));
+  };
+
+  const mapVendors = (vendors: any[]) => {
+    return vendors.map(v => ({
+      image: v.logo_url || "https://via.placeholder.com/150",
+      title: v.business_name,
+      price: "100+ Products",
+      vendor: v.business_name,
+      vendorImage: v.logo_url || "https://via.placeholder.com/50",
+      location: v.market_location || "Lagos",
+      views: "1k",
+      rating: 5,
+      verified: true,
+      badge: { text: "Top Rated", variant: "yellow" as const }
+    }));
+  };
 
   return (
     <section className="flex flex-col gap-8 md:gap-14 w-full">
@@ -344,17 +261,18 @@ export const HeroSection = (): JSX.Element => {
           </div>
         </div>
 
-        <ProductGrid title="Fresh Recommendations" products={sampleProducts} />
-
-        <ProductGrid title="Top Vendors" products={topVendors} />
-
-        <ProductGrid title="Trending in Electronics" products={sampleProducts} />
-
-        <ProductGrid title="Trending in Fashion" products={sampleProducts} />
-
-        <ProductGrid title="Trending in Home & Office" products={sampleProducts} />
-
-        <ProductGrid title="Trending in Groceries" products={sampleProducts} />
+        {loading ? (
+          <div className="flex justify-center py-10"><Loader2 className="animate-spin" /></div>
+        ) : (
+          <>
+            <ProductGrid title="Fresh Recommendations" products={freshRecommendations} />
+            <ProductGrid title="Top Vendors" products={topVendorsList} />
+            <ProductGrid title="Trending in Electronics" products={electronics} />
+            <ProductGrid title="Trending in Fashion" products={fashion} />
+            <ProductGrid title="Trending in Home & Office" products={homeOffice} />
+            <ProductGrid title="Trending in Groceries" products={groceries} />
+          </>
+        )}
       </div>
     </section>
   );

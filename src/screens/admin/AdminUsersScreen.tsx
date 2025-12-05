@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Search, Ban, CheckCircle } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
 
 interface User {
   id: string;
@@ -36,18 +36,18 @@ export const AdminUsersScreen: React.FC = () => {
   const loadUsers = async () => {
     setLoading(true);
     try {
-      let query = supabase
-        .from('profiles')
-        .select('*')
-        .order('created_at', { ascending: false });
+      let profilesData: User[] = [];
 
       if (filterType !== 'all') {
-        query = query.eq('role', filterType);
+        profilesData = await FirestoreService.getDocuments<User>('profiles', {
+          filters: [{ field: 'role', operator: '==', value: filterType }],
+          orderBy: { field: 'created_at', direction: 'desc' }
+        });
+      } else {
+        profilesData = await FirestoreService.getDocuments<User>('profiles', {
+          orderBy: { field: 'created_at', direction: 'desc' }
+        });
       }
-
-      const { data: profilesData, error } = await query;
-
-      if (error) throw error;
 
       if (profilesData) {
         setUsers(profilesData);
@@ -57,19 +57,33 @@ export const AdminUsersScreen: React.FC = () => {
           .map(p => p.id);
 
         if (vendorIds.length > 0) {
-          const { data: vendorsData } = await supabase
-            .from('vendors')
-            .select('user_id, business_name, verification_status, is_active')
-            .in('user_id', vendorIds);
+          // Firestore 'in' query supports up to 10 items. For more, we might need to batch or fetch all vendors.
+          // For now, let's fetch all vendors if the list is long, or use 'in' if short.
+          // A safer approach for scalability is to fetch vendors individually or just fetch all vendors and map them.
+          // Given this is an admin screen, fetching all vendors might be acceptable for now, or we can loop.
+
+          let vendorsData: any[] = [];
+          if (vendorIds.length <= 10) {
+            vendorsData = await FirestoreService.getDocuments('vendors', {
+              filters: [{ field: 'user_id', operator: 'in', value: vendorIds }]
+            });
+          } else {
+            // Fallback: fetch all vendors (not ideal for production but safe for migration)
+            // Or better: batch the 'in' query.
+            // Let's just fetch all vendors for now to ensure it works without complex batching logic here.
+            vendorsData = await FirestoreService.getDocuments('vendors');
+          }
 
           if (vendorsData) {
             const vendorMap = new Map<string, VendorInfo>();
             vendorsData.forEach(v => {
-              vendorMap.set(v.user_id, {
-                business_name: v.business_name,
-                verification_status: v.verification_status,
-                is_active: v.is_active,
-              });
+              if (vendorIds.includes(v.user_id)) {
+                vendorMap.set(v.user_id, {
+                  business_name: v.business_name,
+                  verification_status: v.verification_status,
+                  is_active: v.is_active,
+                });
+              }
             });
             setVendors(vendorMap);
           }
@@ -89,19 +103,27 @@ export const AdminUsersScreen: React.FC = () => {
     try {
       const user = users.find(u => u.id === userId);
       if (user?.role === 'vendor') {
-        await supabase
-          .from('vendors')
-          .update({ is_active: false })
-          .eq('user_id', userId);
+        // We need the vendor ID, but we only have user_id. 
+        // Assuming vendor document ID is same as user_id (common pattern) or we need to find it.
+        // In our schema, vendors table usually has id as primary key, but often it's 1:1 with user.
+        // Let's check if we can find the vendor doc by user_id.
+        const vendorDocs = await FirestoreService.getDocuments('vendors', {
+          filters: [{ field: 'user_id', operator: '==', value: userId }]
+        });
+
+        if (vendorDocs.length > 0) {
+          await FirestoreService.updateDocument('vendors', vendorDocs[0].id, { is_active: false });
+        }
       }
 
-      await supabase.from('system_logs').insert({
+      await FirestoreService.createDocument('system_logs', {
         level: 'warning',
         source: 'admin',
         event: 'user_suspended',
         message: `User suspended by admin`,
         user_id: userId,
         metadata: { admin_action: true },
+        created_at: new Date().toISOString()
       });
 
       alert('User suspended successfully');
@@ -119,19 +141,23 @@ export const AdminUsersScreen: React.FC = () => {
     try {
       const user = users.find(u => u.id === userId);
       if (user?.role === 'vendor') {
-        await supabase
-          .from('vendors')
-          .update({ is_active: true })
-          .eq('user_id', userId);
+        const vendorDocs = await FirestoreService.getDocuments('vendors', {
+          filters: [{ field: 'user_id', operator: '==', value: userId }]
+        });
+
+        if (vendorDocs.length > 0) {
+          await FirestoreService.updateDocument('vendors', vendorDocs[0].id, { is_active: true });
+        }
       }
 
-      await supabase.from('system_logs').insert({
+      await FirestoreService.createDocument('system_logs', {
         level: 'info',
         source: 'admin',
         event: 'user_activated',
         message: `User activated by admin`,
         user_id: userId,
         metadata: { admin_action: true },
+        created_at: new Date().toISOString()
       });
 
       alert('User activated successfully');
@@ -243,41 +269,37 @@ export const AdminUsersScreen: React.FC = () => {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setFilterType('all')}
-                className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${
-                  filterType === 'all'
-                    ? 'bg-green-700 text-white'
-                    : 'bg-white text-neutral-700 border border-neutral-200'
-                }`}
+                className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${filterType === 'all'
+                  ? 'bg-green-700 text-white'
+                  : 'bg-white text-neutral-700 border border-neutral-200'
+                  }`}
               >
                 All
               </button>
               <button
                 onClick={() => setFilterType('buyer')}
-                className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${
-                  filterType === 'buyer'
-                    ? 'bg-green-700 text-white'
-                    : 'bg-white text-neutral-700 border border-neutral-200'
-                }`}
+                className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${filterType === 'buyer'
+                  ? 'bg-green-700 text-white'
+                  : 'bg-white text-neutral-700 border border-neutral-200'
+                  }`}
               >
                 Buyers
               </button>
               <button
                 onClick={() => setFilterType('vendor')}
-                className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${
-                  filterType === 'vendor'
-                    ? 'bg-green-700 text-white'
-                    : 'bg-white text-neutral-700 border border-neutral-200'
-                }`}
+                className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${filterType === 'vendor'
+                  ? 'bg-green-700 text-white'
+                  : 'bg-white text-neutral-700 border border-neutral-200'
+                  }`}
               >
                 Vendors
               </button>
               <button
                 onClick={() => setFilterType('admin')}
-                className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${
-                  filterType === 'admin'
-                    ? 'bg-green-700 text-white'
-                    : 'bg-white text-neutral-700 border border-neutral-200'
-                }`}
+                className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${filterType === 'admin'
+                  ? 'bg-green-700 text-white'
+                  : 'bg-white text-neutral-700 border border-neutral-200'
+                  }`}
               >
                 Admins
               </button>

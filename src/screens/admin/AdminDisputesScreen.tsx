@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Search, Eye, CheckCircle, XCircle, AlertTriangle, MessageSquare, Loader2 } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
 import { logger } from '../../lib/logger';
 
 interface Dispute {
@@ -48,32 +48,67 @@ export const AdminDisputesScreen: React.FC = () => {
       setLoading(true);
       logger.info('Loading disputes');
 
-      const { data, error } = await (supabase
-        .from('disputes') as any)
-        .select(`
-          *,
-          orders:order_id (
-            order_number,
-            buyer_id,
-            vendor_id,
-            total_amount
-          ),
-          profiles:filed_by (
-            full_name,
-            email
-          ),
-          vendors!orders(vendor_id) (
-            business_name
-          )
-        `)
-        .order('created_at', { ascending: false });
+      const disputesData = await FirestoreService.getDocuments<any>('disputes', {
+        orderBy: { field: 'created_at', direction: 'desc' }
+      });
 
-      if (error) {
-        logger.error('Error loading disputes', error);
+      if (!disputesData || disputesData.length === 0) {
+        setDisputes([]);
         return;
       }
 
-      setDisputes(data || []);
+      // Collect IDs for related data
+      const orderIds = Array.from(new Set(disputesData.map(d => d.order_id).filter(Boolean)));
+      const filedByIds = Array.from(new Set(disputesData.map(d => d.filed_by).filter(Boolean)));
+
+      const ordersMap = new Map();
+      const profilesMap = new Map();
+      const vendorsMap = new Map();
+
+      // Fetch Orders
+      if (orderIds.length > 0) {
+        const allOrders = await FirestoreService.getDocuments('orders');
+        allOrders.forEach(o => ordersMap.set(o.id, o));
+
+        // From orders, get vendor IDs
+        const vendorIds = Array.from(new Set(Array.from(ordersMap.values()).map((o: any) => o.vendor_id).filter(Boolean)));
+
+        if (vendorIds.length > 0) {
+          const allVendors = await FirestoreService.getDocuments('vendors');
+          allVendors.forEach(v => vendorsMap.set(v.id, v));
+        }
+      }
+
+      // Fetch Profiles (filed_by)
+      if (filedByIds.length > 0) {
+        const allProfiles = await FirestoreService.getDocuments('profiles');
+        allProfiles.forEach(p => profilesMap.set(p.id, p));
+      }
+
+      const mappedDisputes = disputesData.map((d: any) => {
+        const order = ordersMap.get(d.order_id);
+        const vendor = order ? vendorsMap.get(order.vendor_id) : undefined;
+        const profile = profilesMap.get(d.filed_by);
+
+        return {
+          ...d,
+          order: order ? {
+            order_number: order.order_number,
+            buyer_id: order.buyer_id,
+            vendor_id: order.vendor_id,
+            total_amount: order.total_amount
+          } : undefined,
+          profiles: profile ? {
+            full_name: profile.full_name,
+            email: profile.email
+          } : undefined,
+          vendors: vendor ? {
+            business_name: vendor.business_name
+          } : undefined
+        };
+      });
+
+      setDisputes(mappedDisputes);
     } catch (error) {
       logger.error('Error loading disputes', error);
     } finally {
@@ -88,19 +123,11 @@ export const AdminDisputesScreen: React.FC = () => {
       setActionLoading(disputeId);
       logger.info(`Resolving dispute: ${disputeId}`);
 
-      const { error } = await (supabase
-        .from('disputes') as any)
-        .update({
-          status: 'resolved',
-          resolution: resolution.trim(),
-          resolved_at: new Date().toISOString()
-        })
-        .eq('id', disputeId);
-
-      if (error) {
-        logger.error('Error resolving dispute', error);
-        return;
-      }
+      await FirestoreService.updateDocument('disputes', disputeId, {
+        status: 'resolved',
+        resolution: resolution.trim(),
+        resolved_at: new Date().toISOString()
+      });
 
       // Update local state
       setDisputes(disputes.map(d =>
@@ -223,11 +250,10 @@ export const AdminDisputesScreen: React.FC = () => {
                 <button
                   key={status}
                   onClick={() => setFilterStatus(status as any)}
-                  className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors whitespace-nowrap ${
-                    filterStatus === status
+                  className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors whitespace-nowrap ${filterStatus === status
                       ? 'bg-green-700 text-white'
                       : 'bg-white text-neutral-700 border border-neutral-200'
-                  }`}
+                    }`}
                 >
                   {status.charAt(0).toUpperCase() + status.slice(1)}
                 </button>

@@ -14,7 +14,9 @@ import {
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { FirestoreService } from '../services/firestore.service';
+import { COLLECTIONS } from '../lib/collections';
+import { where, orderBy, limit } from 'firebase/firestore';
 import { orderService } from '../services/orderService';
 
 interface Order {
@@ -84,54 +86,56 @@ export const OrderTrackingScreen: React.FC = () => {
     setLoading(true);
 
     try {
-      const { data: orderData, error: orderError } = await supabase
-        .from('orders')
-        .select(
-          `
-          *,
-          vendor:vendors(business_name)
-        `
-        )
-        .eq('id', orderId)
-        .eq('buyer_id', user.id)
-        .single();
+      // 1. Fetch Order
+      const orderData = await FirestoreService.getDocument<any>(COLLECTIONS.ORDERS, orderId);
 
-      if (orderError || !orderData) {
-        console.error('Error loading order:', orderError);
+      if (!orderData || orderData.buyer_id !== user.uid) {
+        console.error('Order not found or unauthorized');
         return;
       }
 
-      setOrder(orderData);
-
-      const { data: deliveryData } = await supabase
-        .from('deliveries')
-        .select('*')
-        .eq('order_id', orderId)
-        .single();
-
-      if (deliveryData) {
-        setDelivery(deliveryData);
-
-        const { data: historyData } = await supabase
-          .from('delivery_status_history')
-          .select('*')
-          .eq('delivery_id', deliveryData.id)
-          .order('created_at', { ascending: false });
-
-        if (historyData) {
-          setStatusHistory(historyData);
+      // 2. Fetch Vendor
+      let vendorName = 'Unknown Vendor';
+      if (orderData.vendor_id) {
+        const vendor = await FirestoreService.getDocument<any>(COLLECTIONS.VENDORS, orderData.vendor_id);
+        if (vendor) {
+          vendorName = vendor.business_name;
         }
       }
 
-      const { data: escrowData } = await supabase
-        .from('escrow_transactions')
-        .select('*')
-        .eq('order_id', orderId)
-        .single();
+      setOrder({
+        ...orderData,
+        vendor: { business_name: vendorName }
+      });
 
-      if (escrowData) {
-        setEscrow(escrowData);
+      // 3. Fetch Delivery
+      const deliveries = await FirestoreService.getDocuments<any>(COLLECTIONS.DELIVERIES, [
+        where('order_id', '==', orderId),
+        limit(1)
+      ]);
+
+      if (deliveries.length > 0) {
+        const deliveryData = deliveries[0];
+        setDelivery(deliveryData);
+
+        // 4. Fetch Delivery History
+        const historyData = await FirestoreService.getDocuments<StatusHistoryItem>(COLLECTIONS.DELIVERY_STATUS_HISTORY, [
+          where('delivery_id', '==', deliveryData.id),
+          orderBy('created_at', 'desc')
+        ]);
+        setStatusHistory(historyData);
       }
+
+      // 5. Fetch Escrow Transaction
+      const escrowTransactions = await FirestoreService.getDocuments<EscrowTransaction>(COLLECTIONS.ESCROW_TRANSACTIONS, [
+        where('order_id', '==', orderId),
+        limit(1)
+      ]);
+
+      if (escrowTransactions.length > 0) {
+        setEscrow(escrowTransactions[0]);
+      }
+
     } catch (error) {
       console.error('Error loading order details:', error);
     } finally {
@@ -352,9 +356,8 @@ export const OrderTrackingScreen: React.FC = () => {
                       <div key={index} className="flex gap-4">
                         <div className="flex flex-col items-center">
                           <div
-                            className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                              index === 0 ? 'bg-primary-100' : 'bg-neutral-100'
-                            }`}
+                            className={`w-10 h-10 rounded-full flex items-center justify-center ${index === 0 ? 'bg-primary-100' : 'bg-neutral-100'
+                              }`}
                           >
                             {getStatusIcon(item.status)}
                           </div>
@@ -418,11 +421,10 @@ export const OrderTrackingScreen: React.FC = () => {
                   <div className="flex justify-between font-sans text-sm">
                     <span className="text-neutral-600">Payment Status</span>
                     <span
-                      className={`font-medium ${
-                        order.payment_status === 'paid'
+                      className={`font-medium ${order.payment_status === 'paid'
                           ? 'text-green-600'
                           : 'text-yellow-600'
-                      }`}
+                        }`}
                     >
                       {getStatusLabel(order.payment_status)}
                     </span>
@@ -451,13 +453,12 @@ export const OrderTrackingScreen: React.FC = () => {
                   </p>
                   <div className="flex items-center gap-2">
                     <div
-                      className={`w-2 h-2 rounded-full ${
-                        escrow.status === 'held'
+                      className={`w-2 h-2 rounded-full ${escrow.status === 'held'
                           ? 'bg-yellow-500'
                           : escrow.status === 'released'
-                          ? 'bg-green-500'
-                          : 'bg-neutral-500'
-                      }`}
+                            ? 'bg-green-500'
+                            : 'bg-neutral-500'
+                        }`}
                     />
                     <span className="font-sans text-sm font-medium text-neutral-900">
                       {getStatusLabel(escrow.status)}

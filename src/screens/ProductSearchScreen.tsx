@@ -4,7 +4,9 @@ import { SearchIcon, SlidersHorizontal, XIcon, MapPin, TrendingUp, Award } from 
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
-import { firestoreService, where, orderBy, limit } from '../services/firestoreService';
+import { where, orderBy, limit } from 'firebase/firestore';
+import { FirestoreService } from '../services/firestore.service';
+import { COLLECTIONS } from '../lib/collections';
 import { googleMapsService, type PlaceResult } from '../services/googleMapsService';
 import { recommendationService } from '../services/recommendationService';
 import { useAuth } from '../contexts/AuthContext';
@@ -86,7 +88,7 @@ export const ProductSearchScreen: React.FC = () => {
       }
 
       // Fetch products from Firestore
-      let fetchedProducts = await firestoreService.getDocuments<Product>('products', constraints);
+      let fetchedProducts = await FirestoreService.getDocuments<Product>(COLLECTIONS.PRODUCTS, constraints);
 
       // Client-side text search (Firestore doesn't support ILIKE)
       if (query) {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
 import { Users, Check, X, Eye, DollarSign } from 'lucide-react';
 
 interface Marketer {
@@ -29,19 +29,16 @@ export const AdminMarketersScreen: React.FC = () => {
   const loadMarketers = async () => {
     setLoading(true);
     try {
-      let query = supabase
-        .from('marketers')
-        .select('*')
-        .order('created_at', { ascending: false });
+      let options: any = {
+        orderBy: { field: 'created_at', direction: 'desc' }
+      };
 
       if (filter !== 'all') {
-        query = query.eq('status', filter);
+        options.filters = [{ field: 'status', operator: '==', value: filter }];
       }
 
-      const { data, error } = await query;
-
-      if (error) throw error;
-      setMarketers(data || []);
+      const marketersData = await FirestoreService.getDocuments<Marketer>('marketers', options);
+      setMarketers(marketersData || []);
     } catch (error) {
       console.error('Error loading marketers:', error);
     } finally {
@@ -51,15 +48,10 @@ export const AdminMarketersScreen: React.FC = () => {
 
   const handleApproveMarketer = async (marketerId: string) => {
     try {
-      const { error } = await supabase
-        .from('marketers')
-        .update({
-          status: 'active',
-          approved_at: new Date().toISOString(),
-        })
-        .eq('id', marketerId);
-
-      if (error) throw error;
+      await FirestoreService.updateDocument('marketers', marketerId, {
+        status: 'active',
+        approved_at: new Date().toISOString(),
+      });
       loadMarketers();
     } catch (error) {
       console.error('Error approving marketer:', error);
@@ -68,12 +60,7 @@ export const AdminMarketersScreen: React.FC = () => {
 
   const handleRejectMarketer = async (marketerId: string) => {
     try {
-      const { error } = await supabase
-        .from('marketers')
-        .update({ status: 'inactive' })
-        .eq('id', marketerId);
-
-      if (error) throw error;
+      await FirestoreService.updateDocument('marketers', marketerId, { status: 'inactive' });
       loadMarketers();
     } catch (error) {
       console.error('Error rejecting marketer:', error);
@@ -82,12 +69,7 @@ export const AdminMarketersScreen: React.FC = () => {
 
   const handleSuspendMarketer = async (marketerId: string) => {
     try {
-      const { error } = await supabase
-        .from('marketers')
-        .update({ status: 'suspended' })
-        .eq('id', marketerId);
-
-      if (error) throw error;
+      await FirestoreService.updateDocument('marketers', marketerId, { status: 'suspended' });
       loadMarketers();
     } catch (error) {
       console.error('Error suspending marketer:', error);

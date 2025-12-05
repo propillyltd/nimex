@@ -18,7 +18,7 @@ import {
   UserCheck,
   Activity as ActivityIcon
 } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
 
 interface MetricCardProps {
   title: string;
@@ -83,55 +83,56 @@ export const AdminDashboardScreen: React.FC = () => {
       const twentyFourHoursAgo = new Date();
       twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
 
+      // Fetch all necessary data in parallel
       const [
-        usersRes,
-        vendorsRes,
-        productsRes,
-        ordersRes,
-        kycRes,
-        subscriptionsRes,
-        expiredSubsRes,
-        marketersRes,
-        activeUsersRes
+        usersCount,
+        vendorsCount,
+        productsCount,
+        orders,
+        pendingKYCCount,
+        activeSubsCount,
+        expiredSubsCount,
+        marketersCount,
+        activeUsers
       ] = await Promise.all([
-        supabase.from('profiles').select('id', { count: 'exact', head: true }),
-        supabase.from('vendors').select('id', { count: 'exact', head: true }),
-        supabase.from('products').select('id', { count: 'exact', head: true }),
-        supabase.from('orders').select('total_amount'),
-        supabase.from('kyc_submissions').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
-        supabase.from('vendors').select('subscription_status', { count: 'exact' }).eq('subscription_status', 'active'),
-        supabase.from('vendors').select('subscription_status', { count: 'exact' }).eq('subscription_status', 'expired'),
-        supabase.from('marketers').select('id', { count: 'exact', head: true }),
-        supabase.from('profiles').select('id', { count: 'exact', head: true }).gt('updated_at', twentyFourHoursAgo.toISOString()), // Proxy for active users
+        FirestoreService.getCount('profiles'),
+        FirestoreService.getCount('vendors'),
+        FirestoreService.getCount('products'),
+        FirestoreService.getDocuments('orders'), // Need total_amount, so fetch docs
+        FirestoreService.getCount('kyc_submissions', { filters: [{ field: 'status', operator: '==', value: 'pending' }] }),
+        FirestoreService.getCount('vendors', { filters: [{ field: 'subscription_status', operator: '==', value: 'active' }] }),
+        FirestoreService.getCount('vendors', { filters: [{ field: 'subscription_status', operator: '==', value: 'expired' }] }),
+        FirestoreService.getCount('marketers'),
+        FirestoreService.getDocuments('profiles', { filters: [{ field: 'updated_at', operator: '>', value: twentyFourHoursAgo.toISOString() }] }),
       ]);
 
-      const totalRevenue = ordersRes.data?.reduce((sum: number, order: any) => sum + (order.total_amount || 0), 0) || 0;
+      const totalRevenue = orders.reduce((sum: number, order: any) => sum + (order.total_amount || 0), 0) || 0;
 
       // Calculate monthly revenue from subscriptions
-      const monthlyRevenue = (subscriptionsRes.count || 0) * 1200; // Assuming average monthly subscription
+      const monthlyRevenue = activeSubsCount * 1200; // Assuming average monthly subscription
 
       // Calculate new listings from last 30 days
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      const { count: newListingsCount } = await supabase
-        .from('products')
-        .select('id', { count: 'exact', head: true })
-        .gte('created_at', thirtyDaysAgo.toISOString());
+
+      const newListingsCount = await FirestoreService.getCount('products', {
+        filters: [{ field: 'created_at', operator: '>=', value: thirtyDaysAgo.toISOString() }]
+      });
 
       setMetrics({
-        totalUsers: usersRes.count || 0,
-        activeVendors: vendorsRes.count || 0,
-        totalListings: productsRes.count || 0,
-        pendingKYC: kycRes.count || 0,
-        totalTransactions: ordersRes.count || 0,
-        newListings: newListingsCount || 0,
+        totalUsers: usersCount,
+        activeVendors: vendorsCount,
+        totalListings: productsCount,
+        pendingKYC: pendingKYCCount,
+        totalTransactions: orders.length,
+        newListings: newListingsCount,
         uptimeStatus: '99.9%',
         totalRevenue: totalRevenue,
-        activeSubscriptions: subscriptionsRes.count || 0,
+        activeSubscriptions: activeSubsCount,
         monthlyRevenue: monthlyRevenue,
-        expiredSubscriptions: expiredSubsRes.count || 0,
-        totalMarketers: marketersRes.count || 0,
-        activeUsers24h: activeUsersRes.count || 0,
+        expiredSubscriptions: expiredSubsCount,
+        totalMarketers: marketersCount,
+        activeUsers24h: activeUsers.length,
       });
     } catch (error) {
       console.error('Error loading metrics:', error);
@@ -148,15 +149,13 @@ export const AdminDashboardScreen: React.FC = () => {
 
   const loadRecentActivities = async () => {
     try {
-      // Mocking system logs if table doesn't exist or is empty for demo
-      // In production, this would fetch from a real 'system_logs' or 'audit_logs' table
-      const { data: logs, error } = await supabase
-        .from('system_logs') // Ensure this table exists or handle error
-        .select('id, event, user_id, created_at, metadata')
-        .order('created_at', { ascending: false })
-        .limit(6);
+      // Fetch system logs from Firestore
+      const logs = await FirestoreService.getDocuments<any>('system_logs', {
+        orderBy: { field: 'created_at', direction: 'desc' },
+        limitCount: 6
+      });
 
-      if (!error && logs && logs.length > 0) {
+      if (logs && logs.length > 0) {
         const activities: Activity[] = logs.map(log => ({
           id: log.id,
           event: log.event,

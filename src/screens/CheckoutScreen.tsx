@@ -4,7 +4,9 @@ import { ShoppingBag, MapPin, CreditCard, Truck, AlertCircle, CheckCircle } from
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { useAuth } from '../contexts/AuthContext';
-import { firestoreService, where, orderBy } from '../services/firestoreService';
+import { where, orderBy } from 'firebase/firestore';
+import { FirestoreService } from '../services/firestore.service';
+import { COLLECTIONS } from '../lib/collections';
 import { orderService } from '../services/orderService';
 import { paystackService } from '../services/paystackService';
 import { deliveryService } from '../services/deliveryService';
@@ -77,10 +79,10 @@ export const CheckoutScreen: React.FC = () => {
     if (!user) return;
 
     try {
-      const fetchedAddresses = await firestoreService.getDocuments<Address>('addresses', [
-        where('user_id', '==', user.uid),
-        orderBy('is_default', 'desc')
-      ]);
+      const fetchedAddresses = await FirestoreService.getDocuments<Address>(COLLECTIONS.ADDRESSES, {
+        filters: [{ field: 'user_id', operator: '==', value: user.uid }],
+        orderBy: { field: 'is_default', direction: 'desc' }
+      });
 
       setAddresses(fetchedAddresses);
       if (fetchedAddresses.length > 0) {
@@ -137,7 +139,11 @@ export const CheckoutScreen: React.FC = () => {
         is_default: addresses.length === 0,
       };
 
-      const addressId = await firestoreService.createDocument('addresses', addressData);
+      const addressId = `addr_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      await FirestoreService.setDocument(COLLECTIONS.ADDRESSES, addressId, {
+        ...addressData,
+        id: addressId
+      });
 
       const newAddressWithId = { ...addressData, id: addressId } as Address;
       setAddresses([...addresses, newAddressWithId]);

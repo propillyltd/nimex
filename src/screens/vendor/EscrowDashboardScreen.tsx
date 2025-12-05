@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { DollarSign, Clock, TrendingUp, Shield, AlertCircle } from 'lucide-react';
 import { Card, CardContent } from '../../components/ui/card';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
+import { COLLECTIONS } from '../../lib/collections';
 
 interface EscrowStats {
   totalHeld: number;
@@ -48,83 +49,81 @@ export const EscrowDashboardScreen: React.FC = () => {
     setLoading(true);
 
     try {
-      const { data: vendorData } = await supabase
-        .from('vendors')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
+      // Get vendor ID
+      const vendors = await FirestoreService.getDocuments<any>(COLLECTIONS.VENDORS, {
+        filters: [{ field: 'user_id', operator: '==', value: user.uid }],
+        limitCount: 1
+      });
 
-      if (!vendorData) return;
+      if (vendors.length === 0) return;
+      const vendorData = vendors[0];
 
-      let query = supabase
-        .from('escrow_transactions')
-        .select(
-          `
-          *,
-          order:orders(order_number),
-          buyer:profiles!escrow_transactions_buyer_id_fkey(full_name),
-          delivery:deliveries(delivery_status)
-        `
-        )
-        .eq('vendor_id', vendorData.id)
-        .order('held_at', { ascending: false });
-
+      // Build filters for escrow transactions
+      const filters: any[] = [{ field: 'vendor_id', operator: '==', value: vendorData.id }];
       if (activeFilter !== 'all') {
-        query = query.eq('status', activeFilter);
+        filters.push({ field: 'status', operator: '==', value: activeFilter });
       }
 
-      const { data: transactionsData, error } = await query;
+      // Fetch escrow transactions
+      const transactionsData = await FirestoreService.getDocuments<any>(COLLECTIONS.ESCROW_TRANSACTIONS, {
+        filters,
+        orderBy: { field: 'held_at', direction: 'desc' }
+      });
 
-      if (error) {
-        console.error('Error loading escrow data:', error);
-        return;
-      }
+      // Manual joins for related data
+      const enrichedTransactions = await Promise.all(transactionsData.map(async (t) => {
+        const [order, buyer, delivery] = await Promise.all([
+          t.order_id ? FirestoreService.getDocument<any>(COLLECTIONS.ORDERS, t.order_id) : null,
+          t.buyer_id ? FirestoreService.getDocument<any>(COLLECTIONS.PROFILES, t.buyer_id) : null,
+          t.delivery_id ? FirestoreService.getDocument<any>(COLLECTIONS.DELIVERIES, t.delivery_id) : null
+        ]);
 
-      const formattedTransactions: EscrowTransaction[] = (transactionsData || []).map((t) => ({
-        id: t.id,
-        order_number: t.order?.order_number || 'N/A',
-        buyer_name: t.buyer?.full_name || 'Unknown',
-        amount: t.amount,
-        vendor_amount: t.vendor_amount,
-        platform_fee: t.platform_fee,
-        status: t.status,
-        held_at: t.held_at,
-        released_at: t.released_at,
-        delivery_status: t.delivery?.delivery_status,
+        return {
+          id: t.id,
+          order_number: order?.order_number || 'N/A',
+          buyer_name: buyer?.full_name || 'Unknown',
+          amount: t.amount,
+          vendor_amount: t.vendor_amount,
+          platform_fee: t.platform_fee,
+          status: t.status,
+          held_at: t.held_at,
+          released_at: t.released_at,
+          delivery_status: delivery?.delivery_status,
+        };
       }));
 
-      setTransactions(formattedTransactions);
+      setTransactions(enrichedTransactions);
 
-      const { data: statsData } = await supabase
-        .from('escrow_transactions')
-        .select('amount, vendor_amount, status, held_at, released_at')
-        .eq('vendor_id', vendorData.id);
+      // Fetch all transactions for stats (ignoring filter)
+      const allTransactions = await FirestoreService.getDocuments<any>(COLLECTIONS.ESCROW_TRANSACTIONS, {
+        filters: [{ field: 'vendor_id', operator: '==', value: vendorData.id }]
+      });
 
-      if (statsData) {
-        const totalHeld = statsData
+      if (allTransactions) {
+        const totalHeld = allTransactions
           .filter((t) => t.status === 'held')
           .reduce((sum, t) => sum + t.vendor_amount, 0);
 
-        const totalReleased = statsData
+        const totalReleased = allTransactions
           .filter((t) => t.status === 'released')
           .reduce((sum, t) => sum + t.vendor_amount, 0);
 
-        const releasedTransactions = statsData.filter(
+        const releasedTransactions = allTransactions.filter(
           (t) => t.status === 'released' && t.held_at && t.released_at
         );
 
         const averageReleaseTime =
           releasedTransactions.length > 0
             ? releasedTransactions.reduce((sum, t) => {
-                const heldDate = new Date(t.held_at).getTime();
-                const releasedDate = new Date(t.released_at!).getTime();
-                return sum + (releasedDate - heldDate) / (1000 * 60 * 60 * 24);
-              }, 0) / releasedTransactions.length
+              const heldDate = new Date(t.held_at).getTime();
+              const releasedDate = new Date(t.released_at!).getTime();
+              return sum + (releasedDate - heldDate) / (1000 * 60 * 60 * 24);
+            }, 0) / releasedTransactions.length
             : 0;
 
         setStats({
           totalHeld,
-          pendingRelease: statsData.filter((t) => t.status === 'held').length,
+          pendingRelease: allTransactions.filter((t) => t.status === 'held').length,
           totalReleased,
           averageReleaseTime: Math.round(averageReleaseTime),
         });
@@ -260,11 +259,10 @@ export const EscrowDashboardScreen: React.FC = () => {
                     <button
                       key={filter}
                       onClick={() => setActiveFilter(filter as typeof activeFilter)}
-                      className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${
-                        activeFilter === filter
+                      className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors ${activeFilter === filter
                           ? 'bg-primary-600 text-white'
                           : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
-                      }`}
+                        }`}
                     >
                       {filter.charAt(0).toUpperCase() + filter.slice(1)}
                     </button>

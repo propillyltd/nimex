@@ -4,7 +4,9 @@ import { ArrowLeft, Heart, Share2, MessageCircle, ShoppingCart, MapPin, Star, Sh
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
-import { firestoreService, where } from '../services/firestoreService';
+import { where } from 'firebase/firestore';
+import { FirestoreService } from '../services/firestore.service';
+import { COLLECTIONS } from '../lib/collections';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { sanitizeText } from '../lib/sanitization';
@@ -59,18 +61,18 @@ export const ProductDetailScreen: React.FC = () => {
   const fetchProductDetail = async () => {
     try {
       // Fetch product from Firestore
-      const productData = await firestoreService.getDocument<ProductDetail>('products', id!);
+      const productData = await FirestoreService.getDocument<ProductDetail>(COLLECTIONS.PRODUCTS, id!);
 
       if (productData) {
         setProduct(productData);
 
         // Increment views count
-        await firestoreService.updateDocument('products', id!, {
+        await FirestoreService.updateDocument(COLLECTIONS.PRODUCTS, id!, {
           views_count: (productData.views_count || 0) + 1
         });
 
         // Fetch vendor data
-        const vendorData = await firestoreService.getDocument<Vendor>('vendors', productData.vendor_id);
+        const vendorData = await FirestoreService.getDocument<Vendor>(COLLECTIONS.VENDORS, productData.vendor_id);
 
         if (vendorData) {
           setVendor(vendorData);
@@ -87,10 +89,12 @@ export const ProductDetailScreen: React.FC = () => {
     if (!user || !id) return;
 
     try {
-      const wishlists = await firestoreService.getDocuments('wishlists', [
-        where('user_id', '==', user.uid),
-        where('product_id', '==', id)
-      ]);
+      const wishlists = await FirestoreService.getDocuments<any>(COLLECTIONS.WISHLISTS, {
+        filters: [
+          { field: 'user_id', operator: '==', value: user.uid },
+          { field: 'product_id', operator: '==', value: id }
+        ]
+      });
 
       setIsFavorite(wishlists.length > 0);
     } catch (error) {
@@ -107,18 +111,21 @@ export const ProductDetailScreen: React.FC = () => {
     try {
       if (isFavorite) {
         // Find and delete the wishlist item
-        const wishlists = await firestoreService.getDocuments('wishlists', [
-          where('user_id', '==', user.uid),
-          where('product_id', '==', id)
-        ]);
+        const wishlists = await FirestoreService.getDocuments<any>(COLLECTIONS.WISHLISTS, {
+          filters: [
+            { field: 'user_id', operator: '==', value: user.uid },
+            { field: 'product_id', operator: '==', value: id }
+          ]
+        });
 
         if (wishlists.length > 0) {
-          await firestoreService.deleteDocument('wishlists', wishlists[0].id);
+          await FirestoreService.deleteDocument(COLLECTIONS.WISHLISTS, wishlists[0].id);
         }
         setIsFavorite(false);
       } else {
         // Add to wishlist
-        await firestoreService.createDocument('wishlists', {
+        const newId = `wish_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        await FirestoreService.setDocument(COLLECTIONS.WISHLISTS, newId, {
           user_id: user.uid,
           product_id: id!
         });

@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { X, Plus, Tag } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
+import { COLLECTIONS } from '../../lib/collections';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface ProductTag {
   id: string;
@@ -22,6 +24,7 @@ export const ProductTagsInput: React.FC<ProductTagsInputProps> = ({
   onTagsChange,
   maxTags = 10,
 }) => {
+  const { user } = useAuth();
   const [inputValue, setInputValue] = useState('');
   const [suggestions, setSuggestions] = useState<ProductTag[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -41,20 +44,21 @@ export const ProductTagsInput: React.FC<ProductTagsInputProps> = ({
       setLoading(true);
       const normalizedInput = inputValue.toLowerCase().trim();
 
-      const { data, error } = await supabase
-        .from('product_tags')
-        .select('*')
-        .eq('category_id', categoryId)
-        .eq('is_approved', true)
-        .ilike('tag_name', `%${normalizedInput}%`)
-        .order('usage_count', { ascending: false })
-        .limit(10);
+      // Firestore doesn't support ILIKE, so we'll fetch tags for the category and filter client-side
+      // For better performance with large datasets, we'd use Algolia or Typesense
+      const tags = await FirestoreService.getDocuments<ProductTag>(COLLECTIONS.PRODUCT_TAGS, {
+        filters: [
+          { field: 'category_id', operator: '==', value: categoryId },
+          { field: 'is_approved', operator: '==', value: true }
+        ],
+        limitCount: 50 // Fetch more to filter client-side
+      });
 
-      if (error) throw error;
-
-      const filteredSuggestions = (data || []).filter(
-        (tag) => !selectedTags.some((selected) => selected.id === tag.id)
-      );
+      const filteredSuggestions = (tags || [])
+        .filter(tag => tag.tag_name.includes(normalizedInput))
+        .filter(tag => !selectedTags.some(selected => selected.id === tag.id))
+        .sort((a, b) => b.usage_count - a.usage_count)
+        .slice(0, 10);
 
       setSuggestions(filteredSuggestions);
       setShowSuggestions(true);
@@ -85,21 +89,22 @@ export const ProductTagsInput: React.FC<ProductTagsInputProps> = ({
         tagToAdd = existingTag;
       } else {
         try {
-          const { data: newTag, error } = await supabase
-            .from('product_tags')
-            .insert({
-              tag_name: normalizedName,
-              display_name: trimmedValue,
-              category_id: categoryId,
-              usage_count: 0,
-              created_by: (await supabase.auth.getUser()).data.user?.id,
-              is_approved: true,
-            })
-            .select()
-            .single();
+          const newTagId = `tag_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          const newTagData = {
+            id: newTagId,
+            tag_name: normalizedName,
+            display_name: trimmedValue,
+            category_id: categoryId,
+            usage_count: 0,
+            created_by: user?.uid,
+            is_approved: true,
+            created_at: new Date().toISOString()
+          };
 
-          if (error) throw error;
-          tagToAdd = newTag;
+          await FirestoreService.setDocument(COLLECTIONS.PRODUCT_TAGS, newTagId, newTagData);
+
+          // We need to cast to ProductTag because FirestoreService doesn't return the object on setDocument
+          tagToAdd = newTagData as unknown as ProductTag;
         } catch (error) {
           console.error('Error creating new tag:', error);
           return;

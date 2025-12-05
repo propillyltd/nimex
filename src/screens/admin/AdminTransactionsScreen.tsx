@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Search, Eye, DollarSign, CreditCard, Truck, Shield } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { FirestoreService } from '../../services/firestore.service';
 import { logger } from '../../lib/logger';
 
 interface Transaction {
@@ -51,37 +51,71 @@ export const AdminTransactionsScreen: React.FC = () => {
       setLoading(true);
       logger.info('Loading transactions');
 
-      const { data, error } = await (supabase
-        .from('payment_transactions') as any)
-        .select(`
-          *,
-          orders:order_id (
-            order_number,
-            status,
-            total_amount
-          ),
-          profiles:buyer_id (
-            full_name,
-            email
-          ),
-          vendors:vendor_id (
-            business_name
-          ),
-          escrow_transactions:order_id (
-            status,
-            amount,
-            platform_fee,
-            vendor_amount
-          )
-        `)
-        .order('created_at', { ascending: false });
+      const transactionsData = await FirestoreService.getDocuments<any>('payment_transactions', {
+        orderBy: { field: 'created_at', direction: 'desc' }
+      });
 
-      if (error) {
-        logger.error('Error loading transactions', error);
+      if (!transactionsData || transactionsData.length === 0) {
+        setTransactions([]);
         return;
       }
 
-      setTransactions(data || []);
+      // Collect IDs for related data
+      const orderIds = Array.from(new Set(transactionsData.map(t => t.order_id).filter(Boolean)));
+      const buyerIds = Array.from(new Set(transactionsData.map(t => t.buyer_id).filter(Boolean)));
+      const vendorIds = Array.from(new Set(transactionsData.map(t => t.vendor_id).filter(Boolean)));
+
+      // Fetch related data
+      const ordersMap = new Map();
+      const profilesMap = new Map();
+      const vendorsMap = new Map();
+      const escrowMap = new Map();
+
+      // Fetch Orders
+      if (orderIds.length > 0) {
+        const allOrders = await FirestoreService.getDocuments('orders');
+        allOrders.forEach(o => ordersMap.set(o.id, o));
+
+        // Fetch Escrow Transactions (assuming they are linked by order_id)
+        const allEscrow = await FirestoreService.getDocuments('escrow_transactions');
+        allEscrow.forEach(e => escrowMap.set(e.order_id, e));
+      }
+
+      // Fetch Profiles
+      if (buyerIds.length > 0) {
+        const allProfiles = await FirestoreService.getDocuments('profiles');
+        allProfiles.forEach(p => profilesMap.set(p.id, p));
+      }
+
+      // Fetch Vendors
+      if (vendorIds.length > 0) {
+        const allVendors = await FirestoreService.getDocuments('vendors');
+        allVendors.forEach(v => vendorsMap.set(v.id, v));
+      }
+
+      const mappedTransactions = transactionsData.map((t: any) => ({
+        ...t,
+        order: ordersMap.get(t.order_id) ? {
+          order_number: ordersMap.get(t.order_id).order_number,
+          status: ordersMap.get(t.order_id).status,
+          total_amount: ordersMap.get(t.order_id).total_amount
+        } : undefined,
+        buyer: profilesMap.get(t.buyer_id) ? {
+          full_name: profilesMap.get(t.buyer_id).full_name,
+          email: profilesMap.get(t.buyer_id).email
+        } : undefined,
+        vendor: vendorsMap.get(t.vendor_id) ? {
+          business_name: vendorsMap.get(t.vendor_id).business_name
+        } : undefined,
+        escrow: escrowMap.get(t.order_id) ? {
+          status: escrowMap.get(t.order_id).status,
+          amount: escrowMap.get(t.order_id).amount,
+          platform_fee: escrowMap.get(t.order_id).platform_fee,
+          vendor_amount: escrowMap.get(t.order_id).vendor_amount
+        } : undefined
+      }));
+
+      setTransactions(mappedTransactions);
     } catch (error) {
       logger.error('Error loading transactions', error);
     } finally {
@@ -196,11 +230,10 @@ export const AdminTransactionsScreen: React.FC = () => {
                 <button
                   key={status}
                   onClick={() => setFilterStatus(status as any)}
-                  className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors whitespace-nowrap ${
-                    filterStatus === status
-                      ? 'bg-green-700 text-white'
-                      : 'bg-white text-neutral-700 border border-neutral-200'
-                  }`}
+                  className={`px-4 py-2 rounded-lg font-sans text-sm font-medium transition-colors whitespace-nowrap ${filterStatus === status
+                    ? 'bg-green-700 text-white'
+                    : 'bg-white text-neutral-700 border border-neutral-200'
+                    }`}
                 >
                   {status.charAt(0).toUpperCase() + status.slice(1)}
                 </button>

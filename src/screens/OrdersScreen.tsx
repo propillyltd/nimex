@@ -4,7 +4,9 @@ import { Package, Truck, Clock, CheckCircle, XCircle, Search } from 'lucide-reac
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { FirestoreService } from '../services/firestore.service';
+import { COLLECTIONS } from '../lib/collections';
+import { where, orderBy } from 'firebase/firestore';
 
 interface Order {
   id: string;
@@ -39,26 +41,50 @@ export const OrdersScreen: React.FC = () => {
     if (!user) return;
 
     try {
-      const { data, error } = await supabase
-        .from('orders')
-        .select(`
-          *,
-          vendor:vendors(business_name),
-          order_items(product_title, quantity)
-        `)
-        .eq('buyer_id', user.id)
-        .order('created_at', { ascending: false });
+      // 1. Fetch orders for the current user
+      const ordersData = await FirestoreService.getDocuments<any>(COLLECTIONS.ORDERS, [
+        where('buyer_id', '==', user.uid),
+        orderBy('created_at', 'desc')
+      ]);
 
-      if (error) throw error;
+      // 2. Manually join related data (vendors and order items)
+      const formattedOrders = await Promise.all(
+        ordersData.map(async (order) => {
+          try {
+            // Fetch vendor details
+            let vendorName = 'Unknown Vendor';
+            if (order.vendor_id) {
+              const vendor = await FirestoreService.getDocument<any>(COLLECTIONS.VENDORS, order.vendor_id);
+              if (vendor) {
+                vendorName = vendor.business_name;
+              }
+            }
 
-      // Filter and format orders to handle null vendor data
-      const formattedOrders = (data || []).map(order => ({
-        ...order,
-        vendor: {
-          business_name: order.vendor?.business_name || 'Unknown Vendor'
-        },
-        order_items: order.order_items || []
-      }));
+            // Fetch order items
+            const orderItems = await FirestoreService.getDocuments<any>(COLLECTIONS.ORDER_ITEMS, [
+              where('order_id', '==', order.id)
+            ]);
+
+            return {
+              ...order,
+              vendor: {
+                business_name: vendorName
+              },
+              order_items: orderItems.map(item => ({
+                product_title: item.product_title,
+                quantity: item.quantity
+              }))
+            };
+          } catch (err) {
+            console.error(`Error enriching order ${order.id}:`, err);
+            return {
+              ...order,
+              vendor: { business_name: 'Unknown Vendor' },
+              order_items: []
+            };
+          }
+        })
+      );
 
       setOrders(formattedOrders);
     } catch (error) {
@@ -135,11 +161,10 @@ export const OrdersScreen: React.FC = () => {
               <button
                 key={status}
                 onClick={() => setFilterStatus(status)}
-                className={`px-4 py-2 rounded-lg font-sans text-sm font-medium whitespace-nowrap transition-colors ${
-                  filterStatus === status
+                className={`px-4 py-2 rounded-lg font-sans text-sm font-medium whitespace-nowrap transition-colors ${filterStatus === status
                     ? 'bg-primary-500 text-white'
                     : 'bg-white text-neutral-700 hover:bg-neutral-50'
-                }`}
+                  }`}
               >
                 {status.charAt(0).toUpperCase() + status.slice(1)}
               </button>

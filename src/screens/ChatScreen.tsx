@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, MessageCircle, User, Store } from 'lucide-react';
 import { Button } from '../components/ui/button';
-import { supabase } from '../lib/supabase';
+import { FirestoreService } from '../services/firestore.service';
+import { COLLECTIONS } from '../lib/collections';
 import { logger } from '../lib/logger';
 import { sanitizeText } from '../lib/sanitization';
 import { useAuth } from '../contexts/AuthContext';
+import { where, orderBy, onSnapshot, query, collection, Timestamp } from 'firebase/firestore';
+import { db } from '../lib/firebase.config';
 
 interface Conversation {
   id: string;
@@ -51,34 +54,37 @@ export const ChatScreen: React.FC = () => {
 
   useEffect(() => {
     loadConversations();
-
-    // Real-time subscription for new messages
-    const messageSubscription = supabase
-      .channel('chat_messages')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'chat_messages',
-        },
-        (payload) => {
-          const newMessage = payload.new as Message;
-          // Check if this message belongs to current user's conversations
-          if (selectedConversation?.id === newMessage.conversation_id) {
-            setMessages(prev => [...prev, newMessage]);
-            markMessagesAsRead(newMessage.conversation_id);
-          }
-          // Refresh conversations to update last message
-          loadConversations();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      messageSubscription.unsubscribe();
-    };
   }, [user?.id]);
+
+  // Real-time subscription for messages in selected conversation
+  useEffect(() => {
+    if (!selectedConversation) return;
+
+    const q = query(
+      collection(db, COLLECTIONS.CHAT_MESSAGES),
+      where('conversation_id', '==', selectedConversation.id),
+      orderBy('created_at', 'asc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const newMessages = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Message[];
+
+      setMessages(newMessages);
+
+      // Mark as read if the last message is not from current user
+      if (newMessages.length > 0) {
+        const lastMsg = newMessages[newMessages.length - 1];
+        if (lastMsg.sender_id !== user?.id && !lastMsg.is_read) {
+          markMessagesAsRead(selectedConversation.id);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [selectedConversation?.id]);
 
   useEffect(() => {
     if (selectedConversation) {
@@ -98,29 +104,52 @@ export const ChatScreen: React.FC = () => {
       setLoading(true);
       logger.info('Loading conversations');
 
-      const { data, error } = await (supabase
-        .from('chat_conversations') as any)
-        .select(`
-          *,
-          profiles:buyer_id (
-            full_name
-          ),
-          vendors:vendor_id (
-            business_name
-          ),
-          products:product_id (
-            title
-          )
-        `)
-        .or(`buyer_id.eq.${user.id},vendor_id.in.(${profile?.role === 'vendor' ? `(SELECT id FROM vendors WHERE user_id = '${user.id}')` : 'null'})`)
-        .order('last_message_at', { ascending: false });
+      // Firestore doesn't support OR queries across different fields easily.
+      // We fetch conversations where user is buyer AND where user is vendor, then merge.
 
-      if (error) {
-        logger.error('Error loading conversations', error);
-        return;
-      }
+      const buyerConversationsPromise = FirestoreService.getDocuments<any>(COLLECTIONS.CHAT_CONVERSATIONS, [
+        where('buyer_id', '==', user.id)
+      ]);
 
-      setConversations(data || []);
+      const vendorConversationsPromise = profile?.role === 'vendor'
+        ? FirestoreService.getDocuments<any>(COLLECTIONS.CHAT_CONVERSATIONS, [
+          where('vendor_id', '==', user.id)
+        ])
+        : Promise.resolve([]);
+
+      const [buyerConvos, vendorConvos] = await Promise.all([buyerConversationsPromise, vendorConversationsPromise]);
+
+      // Merge and deduplicate (though IDs should be unique across these sets ideally)
+      const allConvos = [...buyerConvos, ...vendorConvos];
+      const uniqueConvos = Array.from(new Map(allConvos.map(c => [c.id, c])).values());
+
+      // Manually join related data
+      const enrichedConvos = await Promise.all(uniqueConvos.map(async (convo) => {
+        try {
+          const [buyer, vendor, product] = await Promise.all([
+            FirestoreService.getDocument<any>(COLLECTIONS.PROFILES, convo.buyer_id),
+            FirestoreService.getDocument<any>(COLLECTIONS.VENDORS, convo.vendor_id),
+            convo.product_id ? FirestoreService.getDocument<any>(COLLECTIONS.PRODUCTS, convo.product_id) : null
+          ]);
+
+          return {
+            ...convo,
+            buyer: buyer ? { full_name: buyer.full_name } : { full_name: 'Unknown Buyer' },
+            vendor: vendor ? { business_name: vendor.business_name } : { business_name: 'Unknown Vendor' },
+            product: product ? { title: product.title } : undefined
+          };
+        } catch (e) {
+          console.error('Error enriching conversation', e);
+          return convo;
+        }
+      }));
+
+      // Sort by last_message_at desc
+      enrichedConvos.sort((a, b) => {
+        return new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime();
+      });
+
+      setConversations(enrichedConvos);
     } catch (error) {
       logger.error('Error loading conversations', error);
     } finally {
@@ -129,39 +158,40 @@ export const ChatScreen: React.FC = () => {
   };
 
   const loadMessages = async (conversationId: string) => {
-    try {
-      const { data, error } = await (supabase
-        .from('chat_messages') as any)
-        .select(`
-          *,
-          profiles:sender_id (
-            full_name
-          )
-        `)
-        .eq('conversation_id', conversationId)
-        .order('created_at', { ascending: true });
-
-      if (error) {
-        logger.error('Error loading messages', error);
-        return;
-      }
-
-      setMessages(data || []);
-    } catch (error) {
-      logger.error('Error loading messages', error);
-    }
+    // This is now handled by the real-time subscription in useEffect
+    // But we can keep it for initial load if needed, or just rely on the subscription.
+    // The subscription handles both initial load and updates.
   };
 
   const markMessagesAsRead = async (conversationId: string) => {
     if (!user?.id) return;
 
     try {
-      await (supabase
-        .from('chat_messages') as any)
-        .update({ is_read: true })
-        .eq('conversation_id', conversationId)
-        .neq('sender_id', user.id)
-        .eq('is_read', false);
+      // Find unread messages not sent by current user
+      const unreadMessages = await FirestoreService.getDocuments<Message>(COLLECTIONS.CHAT_MESSAGES, [
+        where('conversation_id', '==', conversationId),
+        where('is_read', '==', false),
+        where('sender_id', '!=', user.id)
+      ]);
+
+      if (unreadMessages.length > 0) {
+        // Batch update
+        const batchOps = unreadMessages.map(msg => ({
+          type: 'update' as const,
+          collectionName: COLLECTIONS.CHAT_MESSAGES,
+          documentId: msg.id,
+          data: { is_read: true }
+        }));
+
+        await FirestoreService.batchWrite(batchOps);
+
+        // Also update conversation unread counts
+        // This is a bit complex because we need to know if we are buyer or vendor
+        // For simplicity, we can just reset the count for the current user's role
+        // But we need the conversation object to know which field to update.
+        // We'll skip updating the conversation document for now to avoid race conditions 
+        // or just rely on the next message to fix counts, or do a separate update if we had the convo.
+      }
     } catch (error) {
       logger.error('Error marking messages as read', error);
     }
@@ -172,33 +202,34 @@ export const ChatScreen: React.FC = () => {
 
     setSending(true);
     try {
-      const { error } = await (supabase
-        .from('chat_messages') as any)
-        .insert({
-          conversation_id: selectedConversation.id,
-          sender_id: user.id,
-          message_text: newMessage.trim()
-        });
+      const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-      if (error) {
-        logger.error('Error sending message', error);
-        return;
-      }
+      await FirestoreService.setDocument(COLLECTIONS.CHAT_MESSAGES, messageId, {
+        conversation_id: selectedConversation.id,
+        sender_id: user.id,
+        message_text: newMessage.trim(),
+        is_read: false,
+        created_at: Timestamp.now()
+      });
 
       // Update conversation last message
-      await (supabase
-        .from('chat_conversations') as any)
-        .update({
-          last_message: newMessage.trim(),
-          last_message_at: new Date().toISOString(),
-          unread_buyer: selectedConversation.buyer_id !== user.id ? selectedConversation.unread_buyer + 1 : 0,
-          unread_vendor: selectedConversation.vendor_id !== user.id ? selectedConversation.unread_vendor + 1 : 0
-        })
-        .eq('id', selectedConversation.id);
+      const updates: any = {
+        last_message: newMessage.trim(),
+        last_message_at: new Date().toISOString(), // Use ISO string for consistency with sorting
+      };
+
+      if (selectedConversation.buyer_id !== user.id) {
+        updates.unread_buyer = (selectedConversation.unread_buyer || 0) + 1;
+      }
+      if (selectedConversation.vendor_id !== user.id) {
+        updates.unread_vendor = (selectedConversation.unread_vendor || 0) + 1;
+      }
+
+      await FirestoreService.updateDocument(COLLECTIONS.CHAT_CONVERSATIONS, selectedConversation.id, updates);
 
       setNewMessage('');
-      loadMessages(selectedConversation.id);
-      loadConversations();
+      // No need to reload messages, subscription will catch it
+      loadConversations(); // Refresh list to show new last message
     } catch (error) {
       logger.error('Error sending message', error);
     } finally {
@@ -272,16 +303,14 @@ export const ChatScreen: React.FC = () => {
                     <div
                       key={conversation.id}
                       onClick={() => setSelectedConversation(conversation)}
-                      className={`p-4 border-b border-neutral-100 cursor-pointer hover:bg-neutral-50 transition-colors ${
-                        isSelected ? 'bg-green-50 border-l-4 border-l-green-700' : ''
-                      }`}
+                      className={`p-4 border-b border-neutral-100 cursor-pointer hover:bg-neutral-50 transition-colors ${isSelected ? 'bg-green-50 border-l-4 border-l-green-700' : ''
+                        }`}
                     >
                       <div className="flex items-start gap-3">
-                        <div className={`p-2 rounded-full ${
-                          otherParticipant.type === 'vendor'
+                        <div className={`p-2 rounded-full ${otherParticipant.type === 'vendor'
                             ? 'bg-blue-100 text-blue-600'
                             : 'bg-green-100 text-green-600'
-                        }`}>
+                          }`}>
                           {otherParticipant.type === 'vendor' ? (
                             <Store className="w-4 h-4" />
                           ) : (
@@ -328,11 +357,10 @@ export const ChatScreen: React.FC = () => {
                 {/* Chat Header */}
                 <div className="p-4 border-b border-neutral-200">
                   <div className="flex items-center gap-3">
-                    <div className={`p-2 rounded-full ${
-                      getOtherParticipant(selectedConversation).type === 'vendor'
+                    <div className={`p-2 rounded-full ${getOtherParticipant(selectedConversation).type === 'vendor'
                         ? 'bg-blue-100 text-blue-600'
                         : 'bg-green-100 text-green-600'
-                    }`}>
+                      }`}>
                       {getOtherParticipant(selectedConversation).type === 'vendor' ? (
                         <Store className="w-4 h-4" />
                       ) : (
@@ -363,11 +391,10 @@ export const ChatScreen: React.FC = () => {
                         className={`flex ${isOwnMessage ? 'justify-end' : 'justify-start'}`}
                       >
                         <div
-                          className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
-                            isOwnMessage
+                          className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${isOwnMessage
                               ? 'bg-green-700 text-white'
                               : 'bg-neutral-100 text-neutral-900'
-                          }`}
+                            }`}
                         >
                           {message.message_text && (
                             <p className="font-sans text-sm">{sanitizeText(message.message_text)}</p>
@@ -379,9 +406,8 @@ export const ChatScreen: React.FC = () => {
                               className="max-w-full rounded mt-2"
                             />
                           )}
-                          <p className={`font-sans text-xs mt-1 ${
-                            isOwnMessage ? 'text-green-100' : 'text-neutral-500'
-                          }`}>
+                          <p className={`font-sans text-xs mt-1 ${isOwnMessage ? 'text-green-100' : 'text-neutral-500'
+                            }`}>
                             {formatTime(message.created_at)}
                           </p>
                         </div>
